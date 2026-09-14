@@ -1,8 +1,11 @@
 package com.nekochat.ui
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -106,6 +109,12 @@ fun AddModelsScreen(vm: ChatViewModel) {
                                 onCancel = { confirmCancel = d },
                                 onDismiss = { vm.downloads.dismiss(d.repoId) },
                                 onUse = { d.folder?.let(vm::useDownloadedModel) },
+                                onOpenNetworkSettings = {
+                                    // App info is where "Mobile data & Wi-Fi → Allow network access" lives.
+                                    context.startActivity(
+                                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)),
+                                    )
+                                },
                             )
                         }
                     }
@@ -192,13 +201,15 @@ private fun DownloadRow(
     onCancel: () -> Unit,
     onDismiss: () -> Unit,
     onUse: () -> Unit,
+    onOpenNetworkSettings: () -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().innerCard().padding(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(d.name, color = Neko.Text, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1,
                     overflow = TextOverflow.Ellipsis)
-                Text(d.repoId, color = Neko.TextMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${d.repoId} · ${d.engine.label}", color = Neko.TextMuted, fontSize = 12.sp, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
             }
             if (d.status == DownloadStatus.Completed) {
                 IconButton(onClick = onDismiss) {
@@ -225,7 +236,8 @@ private fun DownloadRow(
             DownloadStatus.Completed -> StatusText("Installed · ${formatBytes(d.bytesTotal)}", color = Neko.Success)
             DownloadStatus.Failed -> Row(verticalAlignment = Alignment.Top, modifier = Modifier.padding(top = 6.dp)) {
                 Icon(Icons.Rounded.Warning, contentDescription = "Error", tint = Neko.Error, modifier = Modifier.size(16.dp))
-                Text(d.error ?: "Download failed.", color = Neko.Error, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp))
+                Text(d.error ?: "Download failed.", color = Neko.Error, fontSize = 13.sp, maxLines = 3,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 6.dp))
             }
         }
         val actions: List<@Composable () -> Unit> = when (d.status) {
@@ -234,8 +246,11 @@ private fun DownloadRow(
                 { Chip("Cancel", selected = false, destructive = true, onClick = onCancel) })
             DownloadStatus.Paused -> listOf({ Chip("Resume", selected = false, onClick = onResume) },
                 { Chip("Cancel", selected = false, destructive = true, onClick = onCancel) })
-            DownloadStatus.Failed -> listOf({ Chip("Retry", selected = false, onClick = onResume) },
-                { Chip("Remove", selected = false, destructive = true, onClick = onCancel) })
+            DownloadStatus.Failed -> listOfNotNull(
+                if (d.networkBlocked) ({ Chip("Open network settings", selected = true, onClick = onOpenNetworkSettings) }) else null,
+                { Chip("Retry", selected = false, onClick = onResume) },
+                { Chip("Remove", selected = false, destructive = true, onClick = onCancel) },
+            )
             DownloadStatus.Completed -> listOf({ Chip("Use this model", selected = true, onClick = onUse) })
         }
         if (actions.isNotEmpty()) {

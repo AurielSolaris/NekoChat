@@ -15,13 +15,24 @@ data class ModelDownload(
     val error: String? = null,
     /** The model folder, once completed. */
     val folder: String? = null,
+    /** Android is blocking NekoChat's network access (per-app setting); the UI offers a way to fix it. */
+    val networkBlocked: Boolean = false,
+    /** Engine moving the bytes; fixed for the life of a download. */
+    val engine: DownloadEngine = DownloadEngine.Aria2Multi,
 ) {
     val progress: Float get() = if (bytesTotal > 0) (bytesDone.toFloat() / bytesTotal).coerceIn(0f, 1f) else 0f
     val active: Boolean get() = status == DownloadStatus.Preparing || status == DownloadStatus.Downloading
     val name: String get() = repoId.substringAfterLast('/')
 }
 
-class DownloadException(message: String) : Exception(message)
+class DownloadException(message: String, val networkBlocked: Boolean = false) : Exception(message)
+
+/** What moves the bytes. A download keeps the engine it was started with. */
+enum class DownloadEngine(val label: String, val detail: String, val connections: Int) {
+    Aria2Multi("aria2 (multi-thread)", "8 connections per file. Fastest.", 8),
+    Aria2Single("aria2 (single-thread)", "aria2 with 1 connection per file, for servers or networks that dislike parallel connections.", 1),
+    Fetch("Fetch (single-thread)", "Android's own HTTP client, 1 connection per file. No native downloader involved.", 1),
+}
 
 /** How download hosts are resolved. */
 enum class DnsMode(val label: String) {
@@ -34,8 +45,9 @@ enum class DnsMode(val label: String) {
 
 /**
  * Fetches models from the Hugging Face Hub into NekoChat's models folder, where the model
- * scanner picks them up. The UI depends only on this interface; [Aria2DownloadService] is the
- * current implementation and can be replaced without touching the model screens.
+ * scanner picks them up. The UI depends only on this interface; [HubDownloadService] is the
+ * current implementation (with aria2 and Fetch transfer engines) and can be replaced without
+ * touching the model screens.
  */
 interface ModelDownloadService {
     val downloads: StateFlow<List<ModelDownload>>
@@ -50,8 +62,11 @@ interface ModelDownloadService {
     /** Removes a finished entry from the list; the model stays installed. */
     fun dismiss(repoId: String)
 
-    /** Resolver for file transfers. Applies to downloads started or resumed afterwards. */
+    /** Resolver for aria2 transfers. Applies to downloads started or resumed afterwards. */
     fun setDnsMode(mode: DnsMode)
+
+    /** Engine for downloads started from now on; existing downloads keep theirs. */
+    fun setEngine(engine: DownloadEngine)
 }
 
 /** App-wide instance: downloads outlive screens and the view model. */
@@ -59,6 +74,6 @@ object Downloads {
     @Volatile private var instance: ModelDownloadService? = null
 
     fun get(context: Context): ModelDownloadService = instance ?: synchronized(this) {
-        instance ?: Aria2DownloadService(context.applicationContext).also { instance = it }
+        instance ?: HubDownloadService(context.applicationContext).also { instance = it }
     }
 }

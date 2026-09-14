@@ -24,11 +24,15 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import com.nekochat.download.DnsMode
+import com.nekochat.download.DownloadEngine
 import com.nekochat.ui.theme.Neko
 import com.nekochat.ui.theme.NekoRadius
 
 /** App settings: everything Setup asked for, changeable any time, plus downloads and About. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(vm: ChatViewModel) {
     val load by vm.load.collectAsState()
@@ -79,22 +83,41 @@ fun SettingsScreen(vm: ChatViewModel) {
             }
 
             SettingsGroup("Downloads") {
-                Text("DNS for model downloads", color = Neko.Text, fontSize = 15.sp)
+                Text("Downloader", color = Neko.Text, fontSize = 15.sp)
                 Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DnsMode.entries.forEach { m -> Chip(m.label, selected = vm.dnsMode == m) { vm.selectDnsMode(m) } }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DownloadEngine.entries.forEach { e ->
+                        Chip(e.label, selected = vm.downloadEngine == e) { vm.selectDownloadEngine(e) }
+                    }
                 }
                 Text(
-                    when (vm.dnsMode) {
-                        DnsMode.System -> "Uses your phone's DNS, including Private DNS and VPNs. Recommended."
-                        DnsMode.Builtin -> "aria2 looks up hosts itself via Cloudflare, Google and Quad9. Try this if " +
-                            "downloads fail to find huggingface.co on your network."
-                    },
+                    vm.downloadEngine.detail + " Applies to new downloads; running ones keep their downloader.",
                     color = Neko.TextMuted,
                     fontSize = 12.sp,
                     lineHeight = 17.sp,
                     modifier = Modifier.padding(top = 8.dp),
                 )
+
+                // DNS only matters for aria2; Fetch always uses the system resolver.
+                if (vm.downloadEngine != DownloadEngine.Fetch) {
+                    Spacer(Modifier.height(16.dp))
+                    Text("DNS for aria2", color = Neko.Text, fontSize = 15.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        DnsMode.entries.forEach { m -> Chip(m.label, selected = vm.dnsMode == m) { vm.selectDnsMode(m) } }
+                    }
+                    Text(
+                        when (vm.dnsMode) {
+                            DnsMode.System -> "Uses your phone's DNS, including Private DNS and VPNs. Recommended."
+                            DnsMode.Builtin -> "aria2 looks up hosts itself via Cloudflare, Google and Quad9. Try this if " +
+                                "downloads fail to find huggingface.co on your network."
+                        },
+                        color = Neko.TextMuted,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
             }
 
             SettingsGroup("About") {

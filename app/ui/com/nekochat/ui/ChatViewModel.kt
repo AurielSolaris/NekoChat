@@ -17,6 +17,7 @@ import com.nekochat.data.PrefKeys
 import com.nekochat.data.PreferenceStore
 import com.nekochat.data.Role
 import com.nekochat.download.DnsMode
+import com.nekochat.download.DownloadEngine
 import com.nekochat.download.Downloads
 import com.nekochat.download.ModelDownloadService
 import com.nekochat.engine.ChatFormat
@@ -85,6 +86,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var dnsMode by mutableStateOf(DnsMode.System)
         private set
+    var downloadEngine by mutableStateOf(DownloadEngine.Aria2Multi)
+        private set
 
     private val _load = MutableStateFlow<LoadState>(LoadState.Idle)
     val load: StateFlow<LoadState> = _load.asStateFlow()
@@ -116,6 +119,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             backend = ComputeBackend.entries.firstOrNull { it.name == prefs[PrefKeys.BACKEND] } ?: ComputeBackend.Auto
             dnsMode = DnsMode.entries.firstOrNull { it.name == prefs[PrefKeys.DOWNLOAD_DNS] } ?: DnsMode.System
             downloads.setDnsMode(dnsMode)
+            downloadEngine = DownloadEngine.entries.firstOrNull { it.name == prefs[PrefKeys.DOWNLOAD_ENGINE] }
+                ?: DownloadEngine.Aria2Multi
+            downloads.setEngine(downloadEngine)
             prefs[PrefKeys.MODELS_TREE]?.let { Uri.parse(it) }?.let { uri ->
                 repository.setTree(uri)
                 modelsFolderName = withContext(Dispatchers.IO) { repository.folderName(uri) }
@@ -211,6 +217,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         dnsMode = mode
         prefs[PrefKeys.DOWNLOAD_DNS] = mode.name
         downloads.setDnsMode(mode)
+    }
+
+    fun selectDownloadEngine(engine: DownloadEngine) {
+        downloadEngine = engine
+        prefs[PrefKeys.DOWNLOAD_ENGINE] = engine.name
+        downloads.setEngine(engine)
     }
 
     fun startChatting(model: LocalModel) {

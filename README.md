@@ -27,7 +27,8 @@
   </tr>
   <tr>
     <td align="center"><img src="docs/screenshots/8-confirm-clear.png" alt="Confirmation before clearing a chat" width="200"><br><sub><b>Destructive actions</b> ask first</sub></td>
-    <td align="center" colspan="2"><sub>Screenshots: Samsung Galaxy M31 (Exynos 9611, Mali-G72), release build, Qwen3-0.6B loaded
+    <td align="center"><img src="docs/screenshots/9-downloader-settings.png" alt="Downloader choice in Settings" width="200"><br><sub><b>Downloader</b>: aria2 or Fetch</sub></td>
+    <td align="center" width="200"><sub>Screenshots: Samsung Galaxy M31 (Exynos 9611, Mali-G72), release build, Qwen3-0.6B loaded
       from a folder picked with the system picker and running on Vulkan.</sub></td>
   </tr>
 </table>
@@ -52,8 +53,9 @@ framework dependencies. It uses Vulkan, OpenGL ES or the CPU, whichever the devi
   folder and rescans it every 3 s, so new model subfolders appear on their own.
 - **Model downloads from Hugging Face** (*Settings → Download models*): one-tap Qwen3-0.6B and
   GPT-2, or any `owner/model` repo. Only GPT-2 and Qwen3 models are accepted: the repo's
-  `config.json` is checked before anything is downloaded. Downloads use aria2 (several connections
-  per file, resumable, progress notification).
+  `config.json` is checked before anything is downloaded. Choose the downloader in Settings:
+  **aria2 (multi-thread)**, **aria2 (single-thread)** or **Fetch (single-thread)**. All of them
+  resume where they stopped and show a progress notification.
 - **Multiple chats**, stored in a Room database together with every preference.
 - **Per-chat settings page:** temperature, top-k, top-p, repetition penalty and window, max reply
   length (up to 4096 tokens), seed, persona, chat name.
@@ -114,23 +116,36 @@ Typed text can't inject control tokens: `<|` in user text is split before tokeni
 
 ## Model downloads
 
-The UI depends only on `ModelDownloadService` (start / pause / resume / cancel / dismiss plus a
-`StateFlow` of downloads). The current implementation, `Aria2DownloadService`:
+The UI depends only on `ModelDownloadService` (start / pause / resume / cancel / dismiss, the
+downloader and DNS choice, plus a `StateFlow` of downloads). The implementation,
+`HubDownloadService`, resolves a repo's files with the Hugging Face API, stages them in
+`models/.downloads/`, keeps the download list in Room, runs a `dataSync` foreground service with a
+progress notification, and moves the folder into `models/` when every file is complete. The bytes
+are moved by a `TransferEngine`:
 
-- ships the official aria2 1.37.0 Android build as `jniLibs/arm64-v8a/libaria2c.so`, because only
-  the native library directory is executable on Android 10+ (`useLegacyPackaging` extracts it);
-- starts `aria2c` as a child process with JSON-RPC on `127.0.0.1`, a random port and a random
-  secret, `--stop-with-process` so it never outlives the app, 8 connections per file, and a CA
-  bundle assembled from Android's trusted roots (HTTPS certificates are verified);
-- resolves the file list with the Hugging Face API, keeps the download list in Room, and re-adds
-  unfinished files after a restart so aria2 continues from its `.aria2` control files;
-- runs a `dataSync` foreground service with a progress notification while anything downloads;
-- lets you pick the resolver in *Settings → Downloads*: **System DNS** (default; Android's
-  resolver, so Private DNS and VPN DNS apply) or **Built-in DNS** (aria2's c-ares resolver with
-  Cloudflare, Google and Quad9). The Hugging Face API lookup that lists a repo's files always uses
-  the system resolver.
+| Downloader (*Settings → Downloads*) | Engine | Connections per file | Resumes from |
+|---|---|---|---|
+| aria2 (multi-thread), default | `Aria2Engine` | 8 | `.aria2` control files |
+| aria2 (single-thread) | `Aria2Engine` | 1 | `.aria2` control files |
+| Fetch (single-thread) | `FetchEngine` (Android `HttpURLConnection`) | 1 | HTTP `Range` from the file length |
 
-Swapping aria2 for another downloader means writing one class; the screens don't change.
+Partial files are engine-specific, so every download remembers the engine it started with and is
+always resumed by it; the setting applies to new downloads.
+
+`Aria2Engine` ships the official aria2 1.37.0 Android build as `jniLibs/arm64-v8a/libaria2c.so`
+(only the native library directory is executable on Android 10+; `useLegacyPackaging` extracts
+it) and runs it as a child process with JSON-RPC on `127.0.0.1`, a random port and a random
+secret, and a CA bundle assembled from Android's trusted roots, so HTTPS certificates are
+verified. Android kills it together with the app's process group. Its resolver is selectable:
+**System DNS** (default; Private DNS and VPN DNS apply) or **Built-in DNS** (aria2's c-ares
+resolver with Cloudflare, Google and Quad9). Fetch and the Hugging Face API lookups always use the
+system resolver.
+
+Before downloading, the service checks whether Android is blocking NekoChat's network access
+(some ROMs switch it off for newly installed apps) and, if so, says so and offers a button to the
+app's network settings.
+
+Adding another downloader means writing one `TransferEngine`; the screens don't change.
 
 ## Project layout
 
@@ -163,7 +178,8 @@ app/
 │   │   └── kotlin/
 │   │       ├── engine/          NativeBridge, InferenceEngine, ModelRepository, ChatFormat
 │   │       ├── data/            Room database: preferences, chats, messages, downloads
-│   │       └── download/        ModelDownloadService, Aria2DownloadService, HuggingFaceHub
+│   │       └── download/        ModelDownloadService, HubDownloadService, TransferEngine
+│   │                            (Aria2Engine, FetchEngine), HuggingFaceHub, DownloadForegroundService
 │   ├── gpt2/
 │   │   ├── cpp/gpt2_model.*     GPT-2 forward pass (CPU + GPU graphs)
 │   │   └── kotlin/              Gpt2ChatFormat (transcript prompt, stop sequences)
@@ -305,8 +321,8 @@ memory-bandwidth bound; on this SoC the big CPU cores beat the small Mali GPU.
 
 - Qwen3 thinking mode is always off (replies start after an empty `<think></think>`).
 - The Qwen tokenizer's NFC normalization isn't applied (typed text is almost always NFC already).
-- Downloads need network access for NekoChat; if the phone blocks it (e.g. a per-app network
-  restriction), downloads fail with a message naming that cause.
+- Downloads need network access for NekoChat. Some ROMs switch it off for new apps; NekoChat
+  detects this and links to *App info → Mobile data & Wi-Fi → Allow network access*.
 
 ## Roadmap
 
@@ -327,6 +343,16 @@ About page.
 ## Changelog
 
 Full history: [`changelog.txt`](changelog.txt).
+
+### 0.1.1 (2026-09-15)
+
+- Fixed: model downloads stopped right after the small files. aria2 was started with
+  `--stop-with-process`, which can't see the app's process from inside the sandbox, so it shut
+  itself down. Verified on device: GPT-2 downloaded with a SHA-256 match against Hugging Face.
+- New: choose the downloader: aria2 (multi-thread), aria2 (single-thread) or Fetch (single-thread).
+- New: detects when Android blocks NekoChat's network access and links to the setting that fixes it.
+- Download status checks tolerate a busy downloader; errors are one readable sentence (details go to logcat).
+- `ACCESS_NETWORK_STATE` permission; download table migrated to Room schema v2.
 
 ### 0.1.0 (2026-09-15)
 

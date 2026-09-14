@@ -1,6 +1,7 @@
 package com.nekochat.data
 
 import android.content.Context
+import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Embedded
@@ -15,6 +16,8 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Transaction
 import androidx.room.Upsert
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -45,6 +48,7 @@ object PrefKeys {
     const val MODELS_TREE = "models_tree"
     const val SETUP_DONE = "setup_done"
     const val DOWNLOAD_DNS = "download_dns"
+    const val DOWNLOAD_ENGINE = "download_engine"
 }
 
 /** In-memory view of the preferences table; writes go to Room in order on [writes]. */
@@ -143,6 +147,8 @@ data class DownloadEntity(
     val files: String,
     val error: String?,
     val createdAt: Long,
+    /** DownloadEngine name; added in schema version 2. */
+    @ColumnInfo(defaultValue = "Aria2Multi") val engine: String,
 )
 
 @Dao
@@ -161,7 +167,7 @@ interface DownloadDao {
 
 @Database(
     entities = [PreferenceEntity::class, ChatEntity::class, MessageEntity::class, DownloadEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class NekoDatabase : RoomDatabase() {
@@ -172,8 +178,16 @@ abstract class NekoDatabase : RoomDatabase() {
     companion object {
         @Volatile private var instance: NekoDatabase? = null
 
+        /** v2: downloads remember their transfer engine (aria2 multi/single or Fetch). */
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE downloads ADD COLUMN engine TEXT NOT NULL DEFAULT 'Aria2Multi'")
+            }
+        }
+
         fun get(context: Context): NekoDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, NekoDatabase::class.java, "nekochat.db")
+                .addMigrations(MIGRATION_1_2)
                 .build()
                 .also { instance = it }
         }
