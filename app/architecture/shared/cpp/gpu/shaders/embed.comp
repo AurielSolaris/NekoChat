@@ -1,0 +1,27 @@
+// x[t][c] = table[token[t] - rowBase][c] (+ wpe[pos0 + t][c]). Tokens outside [rowBase, rowBase + rows) are skipped,
+// so a table split across several buffers is gathered with one dispatch per chunk.
+// PA = (T, C, pos0, flags) flags: 1 = add the position table. PB = (rowBase, rows, -, -). Dispatch (ceil(C/64), T).
+layout(local_size_x = 64) in;
+BUF(0) readonly buffer Tokens { int tokens[]; };
+BUF(1) readonly buffer Wte { uint wte[]; };
+BUF(2) readonly buffer Wpe { uint wpe[]; };
+BUF(3) writeonly buffer X { float x[]; };
+
+void main() {
+    int T = PA.x, C = PA.y, pos0 = PA.z;
+    int c = int(gl_GlobalInvocationID.x);
+    int t = int(gl_GlobalInvocationID.y);
+    if (c >= C || t >= T) return;
+    int row = tokens[t] - PB.x;
+    if (row < 0 || row >= PB.y) return;
+    uint e = uint(row * C + c);
+    // Copy to locals first: Mali's GLES compiler rejects readonly SSBO members as call arguments.
+    uint we = wte[e >> 1];
+    float v = halfAt(we, e);
+    if ((PA.w & 1) != 0) {
+        uint p = uint((pos0 + t) * C + c);
+        uint wp = wpe[p >> 1];
+        v += halfAt(wp, p);
+    }
+    x[t * C + c] = v;
+}

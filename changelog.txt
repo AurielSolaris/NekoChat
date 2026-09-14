@@ -1,0 +1,61 @@
+NekoChat changelog
+==================
+
+0.1.0 (2026-09-15)
+------------------
+
+Supported model formats for this release: GPT-2 and Qwen3 only.
+
+Models and engine
+- Custom C++ inference engine (no ML framework): CPU (NEON), Vulkan and OpenGL ES 3.1 backends
+  with automatic, self-tested fallback (Auto: Vulkan -> OpenGL ES -> CPU).
+- GPT-2 (model_type "gpt2", all sizes and fine-tunes).
+- Qwen3 dense models (model_type "qwen3", e.g. Qwen/Qwen3-0.6B): RMSNorm, grouped-query attention
+  with per-head q/k RMSNorm, NeoX rotary embeddings, SwiGLU MLP, tied embeddings; BF16 checkpoints
+  converted to f16 exactly at load time.
+- Qwen2/Qwen3 byte-level BPE pre-tokenizer (hand-written), added/special tokens, stop on
+  <|im_end|> and <|endoftext|>.
+- Qwen3 chat template (ChatML) with thinking disabled.
+- Weights from .safetensors (sharded too) or PyTorch .pt/.pth/.bin (zip format).
+- f16 KV cache on CPU and GPU; tiled online-softmax GPU attention (no 1024-token limit);
+  embedding/LM-head tables split across GPU buffers.
+- Context: GPT-2 1024; Qwen3 8192 on CPU, 4096 on GPU.
+- Verified against Hugging Face transformers: identical tokenizer ids and greedy output for GPT-2
+  and Qwen3-0.6B on CPU, Vulkan and OpenGL ES (Samsung Galaxy M31, Mali-G72).
+- Measured decode on Galaxy M31: GPT-2 ~31 tok/s (CPU), Qwen3-0.6B ~6.1 tok/s (CPU),
+  ~5.0 tok/s (Vulkan).
+- Fixed: Mali GLES storage-barrier bug (full barriers plus a chained-dispatch self-test).
+
+Model downloads
+- "Download models" in Settings (and in first-run setup): recommended Qwen3-0.6B and GPT-2, or any
+  Hugging Face owner/model repository.
+- Only GPT-2 and Qwen3 repositories are accepted; config.json is checked before downloading.
+- Downloads go through the ModelDownloadService interface; the current implementation drives a
+  bundled aria2 1.37.0 (multi-connection, resumable, verified HTTPS) over local JSON-RPC.
+- Pause, resume (also after restarting the app), cancel (with confirmation), progress
+  notification via a foreground service.
+- Unfinished downloads stay in models/.downloads/ and only appear as models once complete.
+- Settings -> Downloads: choose System DNS (default, honours Private DNS/VPN) or Built-in DNS
+  (aria2's own resolver via Cloudflare, Google and Quad9).
+
+App
+- First run asks for a name and a model; afterwards the app opens on the chats list.
+- New Settings page (name, models folder, model, compute backend, Download models, About).
+- New About page: version, GPL-3.0 license, open-source components with their license texts.
+- Chats list has no back button (it is the home screen) and a Settings button.
+- Preferences, chats and downloads are stored in a Room database; data from earlier builds
+  (SharedPreferences + chats.json) is imported once.
+- Deleting a chat, clearing a chat and cancelling a download ask for confirmation; delete icons
+  and destructive buttons are red and name the action.
+- Max reply length can be set up to 4096 tokens (prompt trimming keeps at most half the context
+  for the reply).
+- Models folder chosen with the system folder picker (persistent read access, rescanned every 3 s).
+- Multiple chats with per-chat settings (temperature, top-k, top-p, repetition penalty and window,
+  max reply length, seed, persona, name).
+- One Dark + pastel-pink glass UI with the maneki-neko mascot.
+- Inference on a dedicated thread; UI updates coalesced per frame; CPU workers pinned to big cores.
+
+Project
+- Licensed under GPL-3.0 (LICENSE).
+- App ID app.auriel.realm.nekochat; minSdk 21, targetSdk 36; arm64-v8a.
+- Release signing via keystore.properties.

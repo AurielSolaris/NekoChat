@@ -1,0 +1,57 @@
+// y[t][nOffset + n] (+)= act(x[xRow0 + t] . W[n] + bias[n]); W is f16 packed as uvec4 (8 halves). K % 8 == 0.
+// PA = (K, N, T, flags) flags: 1 = gelu, 2 = accumulate into y, 4 = add bias. N is the row stride of y.
+// PB = (xRow0, nOffset, -, -): nOffset lets a weight matrix split across buffers write its slice of y.
+// One workgroup computes one output column n for up to 4 tokens. Dispatch (rows of W, ceil(T/4)).
+layout(local_size_x = 64) in;
+BUF(0) readonly buffer X { vec4 xv[]; };
+BUF(1) readonly buffer W { uvec4 w[]; };
+BUF(2) readonly buffer Bias { float bias[]; };
+BUF(3) buffer Y { float y[]; };
+
+shared vec4 red[64];
+
+float gelu(float v) {
+    float u = clamp(0.7978845608 * (v + 0.044715 * v * v * v), -15.0, 15.0);
+    return 0.5 * v * (1.0 + tanh(u));
+}
+
+void main() {
+    int K = PA.x, N = PA.y, T = PA.z, flags = PA.w;
+    int n = int(gl_WorkGroupID.x);
+    int t0 = int(gl_WorkGroupID.y) * 4;
+    int l = int(gl_LocalInvocationID.x);
+    int K8 = K >> 3;
+    int K4 = K >> 2;
+    int nt = min(4, T - t0);
+    int wrow = n * K8;
+    int x0 = (PB.x + t0) * K4;
+
+    vec4 acc = vec4(0.0);
+    for (int i = l; i < K8; i += 64) {
+        uvec4 q = w[wrow + i];
+        vec4 wa = vec4(unpackHalf2x16(q.x), unpackHalf2x16(q.y));
+        vec4 wb = vec4(unpackHalf2x16(q.z), unpackHalf2x16(q.w));
+        int xi = x0 + 2 * i;
+        acc.x += dot(xv[xi], wa) + dot(xv[xi + 1], wb);
+        if (nt > 1) acc.y += dot(xv[xi + K4], wa) + dot(xv[xi + K4 + 1], wb);
+        if (nt > 2) acc.z += dot(xv[xi + 2 * K4], wa) + dot(xv[xi + 2 * K4 + 1], wb);
+        if (nt > 3) acc.w += dot(xv[xi + 3 * K4], wa) + dot(xv[xi + 3 * K4 + 1], wb);
+    }
+    red[l] = acc;
+    memoryBarrierShared();
+    barrier();
+    for (int s = 32; s > 0; s >>= 1) {
+        if (l < s) red[l] += red[l + s];
+        memoryBarrierShared();
+        barrier();
+    }
+    if (l < nt) {
+        vec4 r = red[0];
+        float v = l == 0 ? r.x : l == 1 ? r.y : l == 2 ? r.z : r.w;
+        if ((flags & 4) != 0) v += bias[n];
+        if ((flags & 1) != 0) v = gelu(v);
+        int yi = (t0 + l) * N + PB.y + n;
+        if ((flags & 2) != 0) v += y[yi];
+        y[yi] = v;
+    }
+}

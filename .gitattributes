@@ -1,0 +1,12 @@
+# Normalise text to LF in the repository.
+* text=auto
+
+# Shell scripts must stay LF, Windows scripts CRLF.
+gradlew text eol=lf
+*.sh text eol=lf
+*.bat text eol=crlf
+
+# Binaries.
+*.so binary
+*.png binary
+*.jar binary

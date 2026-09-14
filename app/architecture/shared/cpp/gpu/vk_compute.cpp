@@ -1,0 +1,386 @@
+// Vulkan compute backend. libvulkan is loaded at runtime so devices without a driver still start.
+#define VK_NO_PROTOTYPES
+#include <vulkan/vulkan.h>
+
+#include <dlfcn.h>
+
+#include <vector>
+
+#include "../common.h"
+#include "compute.h"
+#include "shaders_gen.h"
+
+namespace neko::gpu {
+
+namespace {
+
+#define NEKO_VK_INSTANCE_FNS(X)                  \
+    X(vkDestroyInstance)                         \
+    X(vkEnumeratePhysicalDevices)                \
+    X(vkGetPhysicalDeviceProperties)             \
+    X(vkGetPhysicalDeviceQueueFamilyProperties)  \
+    X(vkGetPhysicalDeviceMemoryProperties)       \
+    X(vkCreateDevice)                            \
+    X(vkGetDeviceProcAddr)
+
+#define NEKO_VK_DEVICE_FNS(X)          \
+    X(vkDestroyDevice)                 \
+    X(vkGetDeviceQueue)                \
+    X(vkCreateBuffer)                  \
+    X(vkDestroyBuffer)                 \
+    X(vkGetBufferMemoryRequirements)   \
+    X(vkAllocateMemory)                \
+    X(vkFreeMemory)                    \
+    X(vkBindBufferMemory)              \
+    X(vkMapMemory)                     \
+    X(vkUnmapMemory)                   \
+    X(vkFlushMappedMemoryRanges)       \
+    X(vkInvalidateMappedMemoryRanges)  \
+    X(vkCreateShaderModule)            \
+    X(vkDestroyShaderModule)           \
+    X(vkCreateDescriptorSetLayout)     \
+    X(vkDestroyDescriptorSetLayout)    \
+    X(vkCreatePipelineLayout)          \
+    X(vkDestroyPipelineLayout)         \
+    X(vkCreateComputePipelines)        \
+    X(vkDestroyPipeline)               \
+    X(vkCreateDescriptorPool)          \
+    X(vkDestroyDescriptorPool)         \
+    X(vkResetDescriptorPool)           \
+    X(vkAllocateDescriptorSets)        \
+    X(vkUpdateDescriptorSets)          \
+    X(vkCreateCommandPool)             \
+    X(vkDestroyCommandPool)            \
+    X(vkAllocateCommandBuffers)        \
+    X(vkResetCommandBuffer)            \
+    X(vkBeginCommandBuffer)            \
+    X(vkEndCommandBuffer)              \
+    X(vkCmdBindPipeline)               \
+    X(vkCmdBindDescriptorSets)         \
+    X(vkCmdPushConstants)              \
+    X(vkCmdDispatch)                   \
+    X(vkCmdPipelineBarrier)            \
+    X(vkQueueSubmit)                   \
+    X(vkCreateFence)                   \
+    X(vkDestroyFence)                  \
+    X(vkWaitForFences)                 \
+    X(vkResetFences)                   \
+    X(vkDeviceWaitIdle)
+
+void check(VkResult r, const char* what) {
+    if (r != VK_SUCCESS) fail(std::string("Vulkan: ") + what + " failed (" + std::to_string(int(r)) + ")");
+}
+
+struct VkBuf : Buffer {
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    uint8_t* mapped = nullptr;
+    bool coherent = true;
+};
+
+class VulkanBackend final : public ComputeBackend {
+public:
+    VulkanBackend() { init(); }
+    ~VulkanBackend() override { destroy(); }
+
+    const char* name() const override { return "Vulkan"; }
+    std::string deviceName() const override { return deviceName_; }
+    size_t maxBufferBytes() const override { return maxBuffer_; }
+
+    Buffer* create(size_t bytes, const void* init, bool readback) override {
+        auto b = std::make_unique<VkBuf>();
+        b->size = bytes;
+        VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        bi.size = std::max<size_t>(bytes, 16);
+        bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        check(vkCreateBuffer(device_, &bi, nullptr, &b->buffer), "vkCreateBuffer");
+        VkMemoryRequirements req;
+        vkGetBufferMemoryRequirements(device_, b->buffer, &req);
+        uint32_t type = pickMemoryType(req.memoryTypeBits, readback);
+        b->coherent = (memProps_.memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
+        VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        ai.allocationSize = req.size;
+        ai.memoryTypeIndex = type;
+        VkResult r = vkAllocateMemory(device_, &ai, nullptr, &b->memory);
+        if (r != VK_SUCCESS) {
+            vkDestroyBuffer(device_, b->buffer, nullptr);
+            check(r, "vkAllocateMemory");
+        }
+        check(vkBindBufferMemory(device_, b->buffer, b->memory, 0), "vkBindBufferMemory");
+        void* p = nullptr;
+        check(vkMapMemory(device_, b->memory, 0, VK_WHOLE_SIZE, 0, &p), "vkMapMemory");
+        b->mapped = static_cast<uint8_t*>(p);
+        if (init) upload(b.get(), 0, init, bytes);
+        buffers_.push_back(std::move(b));
+        return buffers_.back().get();
+    }
+
+    void upload(Buffer* buf, size_t offset, const void* src, size_t bytes) override {
+        auto* b = static_cast<VkBuf*>(buf);
+        std::memcpy(b->mapped + offset, src, bytes);
+        if (!b->coherent) {
+            VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, b->memory, 0, VK_WHOLE_SIZE};
+            vkFlushMappedMemoryRanges(device_, 1, &range);
+        }
+    }
+
+    void download(Buffer* buf, size_t offset, void* dst, size_t bytes) override {
+        auto* b = static_cast<VkBuf*>(buf);
+        if (!b->coherent) {
+            VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, b->memory, 0, VK_WHOLE_SIZE};
+            vkInvalidateMappedMemoryRanges(device_, 1, &range);
+        }
+        std::memcpy(dst, b->mapped + offset, bytes);
+    }
+
+    void begin() override {
+        check(vkResetDescriptorPool(device_, descPool_, 0), "vkResetDescriptorPool");
+        check(vkResetCommandBuffer(cmd_, 0), "vkResetCommandBuffer");
+        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        check(vkBeginCommandBuffer(cmd_, &bi), "vkBeginCommandBuffer");
+    }
+
+    void dispatch(Kernel k, Buffer* const bindings[4], const int32_t params[8], uint32_t gx, uint32_t gy) override {
+        VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        ai.descriptorPool = descPool_;
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts = &setLayout_;
+        VkDescriptorSet set;
+        check(vkAllocateDescriptorSets(device_, &ai, &set), "vkAllocateDescriptorSets");
+        VkDescriptorBufferInfo infos[4];
+        VkWriteDescriptorSet writes[4];
+        for (int i = 0; i < 4; i++) {
+            auto* b = static_cast<VkBuf*>(bindings[i] ? bindings[i] : dummy_);
+            infos[i] = {b->buffer, 0, VK_WHOLE_SIZE};
+            writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            writes[i].dstSet = set;
+            writes[i].dstBinding = uint32_t(i);
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[i].pBufferInfo = &infos[i];
+        }
+        vkUpdateDescriptorSets(device_, 4, writes, 0, nullptr);
+        vkCmdBindPipeline(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_[int(k)]);
+        vkCmdBindDescriptorSets(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &set, 0, nullptr);
+        vkCmdPushConstants(cmd_, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, 32, params);
+        vkCmdDispatch(cmd_, gx, gy, 1);
+        VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb,
+                             0, nullptr, 0, nullptr);
+    }
+
+    void submitAndWait() override {
+        VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &mb, 0,
+                             nullptr, 0, nullptr);
+        check(vkEndCommandBuffer(cmd_), "vkEndCommandBuffer");
+        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cmd_;
+        check(vkQueueSubmit(queue_, 1, &si, fence_), "vkQueueSubmit");
+        check(vkWaitForFences(device_, 1, &fence_, VK_TRUE, UINT64_MAX), "vkWaitForFences");
+        check(vkResetFences(device_, 1, &fence_), "vkResetFences");
+    }
+
+private:
+    void init() {
+        lib_ = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
+        if (!lib_) fail("libvulkan.so not available");
+        vkGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(lib_, "vkGetInstanceProcAddr"));
+        if (!vkGetInstanceProcAddr) fail("vkGetInstanceProcAddr missing");
+        auto vkCreateInstance =
+            reinterpret_cast<PFN_vkCreateInstance>(vkGetInstanceProcAddr(nullptr, "vkCreateInstance"));
+        if (!vkCreateInstance) fail("vkCreateInstance missing");
+
+        VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+        app.pApplicationName = "NekoChat";
+        app.pEngineName = "NekoEngine";
+        app.apiVersion = VK_API_VERSION_1_0;
+        VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+        ici.pApplicationInfo = &app;
+        check(vkCreateInstance(&ici, nullptr, &instance_), "vkCreateInstance");
+#define X(fn) fn = reinterpret_cast<PFN_##fn>(vkGetInstanceProcAddr(instance_, #fn)); if (!fn) fail("missing " #fn);
+        NEKO_VK_INSTANCE_FNS(X)
+#undef X
+
+        uint32_t count = 0;
+        vkEnumeratePhysicalDevices(instance_, &count, nullptr);
+        if (count == 0) fail("no Vulkan physical device");
+        std::vector<VkPhysicalDevice> devs(count);
+        vkEnumeratePhysicalDevices(instance_, &count, devs.data());
+        for (auto d : devs) {
+            uint32_t qn = 0;
+            vkGetPhysicalDeviceQueueFamilyProperties(d, &qn, nullptr);
+            std::vector<VkQueueFamilyProperties> qs(qn);
+            vkGetPhysicalDeviceQueueFamilyProperties(d, &qn, qs.data());
+            for (uint32_t i = 0; i < qn; i++) {
+                if (qs[i].queueFlags & VK_QUEUE_COMPUTE_BIT) {
+                    phys_ = d;
+                    queueFamily_ = i;
+                    break;
+                }
+            }
+            if (phys_) break;
+        }
+        if (!phys_) fail("no Vulkan compute queue");
+
+        VkPhysicalDeviceProperties props;
+        vkGetPhysicalDeviceProperties(phys_, &props);
+        deviceName_ = props.deviceName;
+        maxBuffer_ = props.limits.maxStorageBufferRange;
+        if (props.limits.maxComputeWorkGroupCount[0] < 65535 || props.limits.maxComputeSharedMemorySize < 8192)
+            fail("Vulkan device limits too small");
+        vkGetPhysicalDeviceMemoryProperties(phys_, &memProps_);
+
+        float prio = 1.0f;
+        VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+        qci.queueFamilyIndex = queueFamily_;
+        qci.queueCount = 1;
+        qci.pQueuePriorities = &prio;
+        VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+        dci.queueCreateInfoCount = 1;
+        dci.pQueueCreateInfos = &qci;
+        check(vkCreateDevice(phys_, &dci, nullptr, &device_), "vkCreateDevice");
+#define X(fn) fn = reinterpret_cast<PFN_##fn>(vkGetDeviceProcAddr(device_, #fn)); if (!fn) fail("missing " #fn);
+        NEKO_VK_DEVICE_FNS(X)
+#undef X
+        vkGetDeviceQueue(device_, queueFamily_, 0, &queue_);
+
+        VkDescriptorSetLayoutBinding binds[4];
+        for (uint32_t i = 0; i < 4; i++)
+            binds[i] = {i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+        VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        lci.bindingCount = 4;
+        lci.pBindings = binds;
+        check(vkCreateDescriptorSetLayout(device_, &lci, nullptr, &setLayout_), "vkCreateDescriptorSetLayout");
+        VkPushConstantRange pcr{VK_SHADER_STAGE_COMPUTE_BIT, 0, 32};
+        VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        pli.setLayoutCount = 1;
+        pli.pSetLayouts = &setLayout_;
+        pli.pushConstantRangeCount = 1;
+        pli.pPushConstantRanges = &pcr;
+        check(vkCreatePipelineLayout(device_, &pli, nullptr, &pipeLayout_), "vkCreatePipelineLayout");
+
+        for (int k = 0; k < int(Kernel::Count); k++) {
+            VkShaderModuleCreateInfo smi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+            smi.codeSize = kShaderSpvSize[k];
+            smi.pCode = reinterpret_cast<const uint32_t*>(kShaderSpv[k]);
+            VkShaderModule mod;
+            check(vkCreateShaderModule(device_, &smi, nullptr, &mod), "vkCreateShaderModule");
+            VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+            cpi.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+            cpi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+            cpi.stage.module = mod;
+            cpi.stage.pName = "main";
+            cpi.layout = pipeLayout_;
+            VkResult r = vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &cpi, nullptr, &pipelines_[k]);
+            vkDestroyShaderModule(device_, mod, nullptr);
+            check(r, kShaderNames[k]);
+        }
+
+        VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kMaxSets * 4};
+        VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        dpi.maxSets = kMaxSets;
+        dpi.poolSizeCount = 1;
+        dpi.pPoolSizes = &ps;
+        check(vkCreateDescriptorPool(device_, &dpi, nullptr, &descPool_), "vkCreateDescriptorPool");
+
+        VkCommandPoolCreateInfo cpci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+        cpci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        cpci.queueFamilyIndex = queueFamily_;
+        check(vkCreateCommandPool(device_, &cpci, nullptr, &cmdPool_), "vkCreateCommandPool");
+        VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        cai.commandPool = cmdPool_;
+        cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cai.commandBufferCount = 1;
+        check(vkAllocateCommandBuffers(device_, &cai, &cmd_), "vkAllocateCommandBuffers");
+        VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        check(vkCreateFence(device_, &fci, nullptr, &fence_), "vkCreateFence");
+
+        dummy_ = create(16, nullptr, false);
+        NEKO_LOGI("Vulkan backend on %s (max storage buffer %zu MB)", deviceName_.c_str(), maxBuffer_ >> 20);
+    }
+
+    uint32_t pickMemoryType(uint32_t allowed, bool readback) const {
+        int best = -1, bestScore = -1;
+        for (uint32_t i = 0; i < memProps_.memoryTypeCount; i++) {
+            if (!(allowed & (1u << i))) continue;
+            VkMemoryPropertyFlags f = memProps_.memoryTypes[i].propertyFlags;
+            if (!(f & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) continue;
+            int score = 0;
+            if (f & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) score += readback ? 1 : 4;
+            if (f & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) score += 2;
+            if (readback && (f & VK_MEMORY_PROPERTY_HOST_CACHED_BIT)) score += 8;
+            if (score > bestScore) { bestScore = score; best = int(i); }
+        }
+        if (best < 0) fail("Vulkan: no host visible memory type");
+        return uint32_t(best);
+    }
+
+    void destroy() {
+        if (device_) {
+            vkDeviceWaitIdle(device_);
+            for (auto& b : buffers_) {
+                vkUnmapMemory(device_, b->memory);
+                vkDestroyBuffer(device_, b->buffer, nullptr);
+                vkFreeMemory(device_, b->memory, nullptr);
+            }
+            buffers_.clear();
+            if (fence_) vkDestroyFence(device_, fence_, nullptr);
+            if (cmdPool_) vkDestroyCommandPool(device_, cmdPool_, nullptr);
+            if (descPool_) vkDestroyDescriptorPool(device_, descPool_, nullptr);
+            for (auto p : pipelines_)
+                if (p) vkDestroyPipeline(device_, p, nullptr);
+            if (pipeLayout_) vkDestroyPipelineLayout(device_, pipeLayout_, nullptr);
+            if (setLayout_) vkDestroyDescriptorSetLayout(device_, setLayout_, nullptr);
+            vkDestroyDevice(device_, nullptr);
+        }
+        if (instance_ && vkDestroyInstance) vkDestroyInstance(instance_, nullptr);
+        if (lib_) dlclose(lib_);
+    }
+
+    static constexpr uint32_t kMaxSets = 1024;
+
+    void* lib_ = nullptr;
+    PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr = nullptr;
+#define X(fn) PFN_##fn fn = nullptr;
+    NEKO_VK_INSTANCE_FNS(X)
+    NEKO_VK_DEVICE_FNS(X)
+#undef X
+    VkInstance instance_ = VK_NULL_HANDLE;
+    VkPhysicalDevice phys_ = VK_NULL_HANDLE;
+    VkDevice device_ = VK_NULL_HANDLE;
+    VkQueue queue_ = VK_NULL_HANDLE;
+    uint32_t queueFamily_ = 0;
+    VkPhysicalDeviceMemoryProperties memProps_{};
+    VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
+    VkPipelineLayout pipeLayout_ = VK_NULL_HANDLE;
+    VkPipeline pipelines_[int(Kernel::Count)] = {};
+    VkDescriptorPool descPool_ = VK_NULL_HANDLE;
+    VkCommandPool cmdPool_ = VK_NULL_HANDLE;
+    VkCommandBuffer cmd_ = VK_NULL_HANDLE;
+    VkFence fence_ = VK_NULL_HANDLE;
+    std::vector<std::unique_ptr<VkBuf>> buffers_;
+    Buffer* dummy_ = nullptr;
+    std::string deviceName_;
+    size_t maxBuffer_ = 0;
+};
+
+}  // namespace
+
+std::unique_ptr<ComputeBackend> createVulkan(std::string& error) {
+    try {
+        return std::make_unique<VulkanBackend>();
+    } catch (const std::exception& e) {
+        error = e.what();
+        return nullptr;
+    }
+}
+
+}  // namespace neko::gpu

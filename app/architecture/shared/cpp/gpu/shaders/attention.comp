@@ -1,0 +1,115 @@
+// Causal grouped-query attention, one (head, token) per workgroup, over f16 KV caches ([ctx][kvWidth], two halves
+// per uint). Keys are visited in tiles of 1024 with an online softmax, so shared memory does not limit the context.
+// PA = (T, qStride, nHead, pos0), PB = (headDim, scale bits, kvWidth, -).
+// q = qkv[t * qStride + h * headDim ..]; out is [T][nHead * headDim]. headDim even and <= 256. Dispatch (nHead, T).
+layout(local_size_x = 64) in;
+BUF(0) readonly buffer QKV { float qkv[]; };
+BUF(1) readonly buffer KC { uint kc[]; };
+BUF(2) readonly buffer VC { uint vc[]; };
+BUF(3) writeonly buffer O { float o[]; };
+
+const int TILE = 1024;
+shared vec2 sq[128];
+shared float sc[TILE];
+shared float red[64];
+
+float reduceMax(float v, int l) {
+    red[l] = v;
+    memoryBarrierShared();
+    barrier();
+    for (int s = 32; s > 0; s >>= 1) {
+        if (l < s) red[l] = max(red[l], red[l + s]);
+        memoryBarrierShared();
+        barrier();
+    }
+    float r = red[0];
+    barrier();
+    return r;
+}
+
+float reduceSum(float v, int l) {
+    red[l] = v;
+    memoryBarrierShared();
+    barrier();
+    for (int s = 32; s > 0; s >>= 1) {
+        if (l < s) red[l] += red[l + s];
+        memoryBarrierShared();
+        barrier();
+    }
+    float r = red[0];
+    barrier();
+    return r;
+}
+
+void main() {
+    int T = PA.x, qStride = PA.y, nHead = PA.z, pos0 = PA.w;
+    int hd = PB.x;
+    float scale = intBitsToFloat(PB.y);
+    int kvW = PB.z;
+    int h = int(gl_WorkGroupID.x);
+    int t = int(gl_WorkGroupID.y);
+    int l = int(gl_LocalInvocationID.x);
+    int L = pos0 + t + 1;
+    int hd2 = hd >> 1;
+    int group = nHead / (kvW / hd);
+    int kv0 = (h / group) * hd;  // this head's K/V offset inside a cache row
+
+    int qo = t * qStride + h * hd;
+    for (int d = l; d < hd2; d += 64) sq[d] = vec2(qkv[qo + 2 * d], qkv[qo + 2 * d + 1]) * scale;
+    memoryBarrierShared();
+    barrier();
+
+    float m = -1e30;
+    float sum = 0.0;
+    vec2 acc0 = vec2(0.0);  // output dims 2l, 2l + 1
+    vec2 acc1 = vec2(0.0);  // output dims 2(l + 64), 2(l + 64) + 1
+    for (int j0 = 0; j0 < L; j0 += TILE) {
+        int n = min(TILE, L - j0);
+        float mx = -1e30;
+        for (int jj = l; jj < n; jj += 64) {
+            int base = ((j0 + jj) * kvW + kv0) >> 1;
+            float s = 0.0;
+            for (int d = 0; d < hd2; d++) {
+                uint kw = kc[base + d];
+                s += dot(sq[d], unpackHalf2x16(kw));
+            }
+            sc[jj] = s;
+            mx = max(mx, s);
+        }
+        float mNew = max(m, reduceMax(mx, l));
+        float ls = 0.0;
+        for (int jj = l; jj < n; jj += 64) {
+            float e = exp(sc[jj] - mNew);
+            sc[jj] = e;
+            ls += e;
+        }
+        float corr = exp(m - mNew);
+        sum = sum * corr + reduceSum(ls, l);
+        acc0 *= corr;
+        acc1 *= corr;
+        for (int jj = 0; jj < n; jj++) {
+            float p = sc[jj];
+            int w = ((j0 + jj) * kvW + kv0) >> 1;
+            if (l < hd2) {
+                uint v0 = vc[w + l];
+                acc0 += p * unpackHalf2x16(v0);
+            }
+            if (l + 64 < hd2) {
+                uint v1 = vc[w + l + 64];
+                acc1 += p * unpackHalf2x16(v1);
+            }
+        }
+        m = mNew;
+        barrier();  // the next tile overwrites sc
+    }
+    float inv = 1.0 / sum;
+    int oo = t * nHead * hd + h * hd;
+    if (l < hd2) {
+        o[oo + 2 * l] = acc0.x * inv;
+        o[oo + 2 * l + 1] = acc0.y * inv;
+    }
+    if (l + 64 < hd2) {
+        o[oo + 2 * (l + 64)] = acc1.x * inv;
+        o[oo + 2 * (l + 64) + 1] = acc1.y * inv;
+    }
+}

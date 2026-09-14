@@ -1,0 +1,15 @@
+// SwiGLU: g[t][i] = silu(h[t][i]) * h[t][I + i] (each h row holds the gate then the up projection).
+// PA = (T, I, -, -). Dispatch (ceil(I/64), T).
+layout(local_size_x = 64) in;
+BUF(0) readonly buffer H { float hbuf[]; };
+BUF(1) writeonly buffer G { float g[]; };
+
+void main() {
+    int T = PA.x, I = PA.y;
+    int i = int(gl_GlobalInvocationID.x);
+    int t = int(gl_GlobalInvocationID.y);
+    if (i >= I || t >= T) return;
+    float a = hbuf[t * 2 * I + i];
+    float b = hbuf[t * 2 * I + I + i];
+    g[t * I + i] = a / (1.0 + exp(-a)) * b;
+}

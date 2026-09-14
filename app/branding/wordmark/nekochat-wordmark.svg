@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  NekoChat wordmark. "Neko" in Primary Pink, "Chat" in Text Primary, platform sans-serif.
+  In the app the wordmark is rendered as text (Compose) with the same colours and weight.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 80" width="360" height="80">
+  <title>NekoChat</title>
+  <text x="0" y="58" font-family="Roboto, 'Google Sans', system-ui, sans-serif" font-size="56" font-weight="700"
+        letter-spacing="-1"><tspan fill="#F4A7B9">Neko</tspan><tspan fill="#F0F0F0">Chat</tspan></text>
+</svg>

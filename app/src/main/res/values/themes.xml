@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NekoChat</string>
+    <!-- One Dark background (app/branding/palette/colors.md) -->
+    <color name="neko_background">#FF282C34</color>
+    <color name="ic_launcher_background">#FF282C34</color>
+
+    <style name="Theme.NekoChat" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/neko_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

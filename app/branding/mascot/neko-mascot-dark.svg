@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- NekoChat mascot for dark surfaces: canonical artwork on a soft pink halo. Derived from neko-mascot.svg. -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 256 256" width="256" height="256">
+  <title>NekoChat mascot (dark)</title>
+  <defs>
+    <radialGradient id="halo" cx="0.5" cy="0.55" r="0.5">
+      <stop offset="0" stop-color="#F4A7B9" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#F4A7B9" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="256" height="256" fill="url(#halo)"/>
+  <image href="neko-mascot.svg" width="256" height="256"/>
+</svg>

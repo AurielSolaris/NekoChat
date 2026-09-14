@@ -1,0 +1,52 @@
+// Qwen3 attention prologue, in place on qkv: per-head RMSNorm (q_norm / k_norm), then NeoX rotary embedding.
+// Heads [0, nHead) are queries and [nHead, nHead + nKv) keys (keys follow the queries in each row).
+// PA = (qkvStride, nHead, headDim, pos0), PB = (eps bits, flags, -, -) flags: 1 = apply the norm.
+// Norm weights: wn[0..hd) for queries, wn[hd..2hd) for keys. cs = [pos][hd / 2] (cos, sin).
+// headDim <= 256. Dispatch (nHead + nKv, T).
+layout(local_size_x = 64) in;
+BUF(0) buffer QKV { float qkv[]; };
+BUF(1) readonly buffer Wn { float wn[]; };
+BUF(2) readonly buffer Rope { vec2 cs[]; };
+
+shared float v[256];
+shared float red[64];
+
+void main() {
+    int stride = PA.x, nHead = PA.y, hd = PA.z, pos0 = PA.w;
+    bool norm = (PB.y & 1) != 0;
+    int head = int(gl_WorkGroupID.x);
+    int t = int(gl_WorkGroupID.y);
+    int l = int(gl_LocalInvocationID.x);
+    int base = t * stride + head * hd;
+
+    float ss = 0.0;
+    for (int d = l; d < hd; d += 64) {
+        float x = qkv[base + d];
+        v[d] = x;
+        ss += x * x;
+    }
+    red[l] = ss;
+    memoryBarrierShared();
+    barrier();
+    for (int s = 32; s > 0; s >>= 1) {
+        if (l < s) red[l] += red[l + s];
+        memoryBarrierShared();
+        barrier();
+    }
+    float r = norm ? inversesqrt(red[0] / float(hd) + intBitsToFloat(PB.x)) : 1.0;
+
+    int wo = head >= nHead ? hd : 0;
+    int hh = hd >> 1;
+    int cp = (pos0 + t) * hh;
+    for (int i = l; i < hh; i += 64) {
+        vec2 c = cs[cp + i];
+        float a = v[i] * r;
+        float b = v[i + hh] * r;
+        if (norm) {
+            a *= wn[wo + i];
+            b *= wn[wo + i + hh];
+        }
+        qkv[base + i] = a * c.x - b * c.y;
+        qkv[base + i + hh] = a * c.y + b * c.x;
+    }
+}

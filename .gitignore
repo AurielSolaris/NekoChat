@@ -1,0 +1,54 @@
+# Gradle / Android build output
+.gradle/
+build/
+app/build/
+app/.cxx/
+.externalNativeBuild/
+.cxx/
+captures/
+*.apk
+*.aab
+*.ap_
+*.dex
+output-metadata.json
+
+# Local machine config
+local.properties
+
+# IDEs and tooling
+.idea/
+*.iml
+.kotlin/
+.vscode/
+.cache/
+compile_commands.json
+.claude/
+
+# Release signing secrets (see README "Signing release builds")
+keystore.properties
+*.jks
+*.keystore
+
+# Model weights never belong in the repo
+*.safetensors
+*.pt
+*.pth
+*.bin
+*.gguf
+models/
+
+# aria2 download leftovers and CLI build dirs (app/schemas/ and jniLibs/libaria2c.so ARE committed)
+*.aria2
+build-cli/
+clibuild/
+
+# Python fixture scripts
+__pycache__/
+*.pyc
+.venv/
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log

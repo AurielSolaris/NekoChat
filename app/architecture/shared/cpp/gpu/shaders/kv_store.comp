@@ -1,0 +1,18 @@
+// Writes the keys and values of token t < T into the f16 caches at position pos0 + t.
+// PA = (T, width, pos0, -), PB = (rowStride, kOffset, vOffset, -): K = qkv[t * rowStride + kOffset ..], V likewise.
+// Caches are [ctx][width] f16, two halves per uint (width even). Dispatch (ceil(width / 128), T).
+layout(local_size_x = 64) in;
+BUF(0) readonly buffer QKV { float qkv[]; };
+BUF(1) writeonly buffer KC { uint kc[]; };
+BUF(2) writeonly buffer VC { uint vc[]; };
+
+void main() {
+    int T = PA.x, W = PA.y, pos0 = PA.z;
+    int c2 = int(gl_GlobalInvocationID.x);
+    int t = int(gl_GlobalInvocationID.y);
+    if (2 * c2 >= W || t >= T) return;
+    int src = t * PB.x + 2 * c2;
+    int dst = (((pos0 + t) * W) >> 1) + c2;
+    kc[dst] = packHalf2x16(vec2(qkv[src + PB.y], qkv[src + PB.y + 1]));
+    vc[dst] = packHalf2x16(vec2(qkv[src + PB.z], qkv[src + PB.z + 1]));
+}
