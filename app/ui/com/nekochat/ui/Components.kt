@@ -59,7 +59,7 @@ fun NekoMascot(size: Dp, modifier: Modifier = Modifier) {
 fun Wordmark(fontSize: TextUnit = 30.sp) {
     Text(
         buildAnnotatedString {
-            withStyle(SpanStyle(color = Neko.Pink)) { append("Neko") }
+            withStyle(SpanStyle(color = Neko.Accent)) { append("Neko") }
             withStyle(SpanStyle(color = Neko.Text)) { append("Chat") }
         },
         fontSize = fontSize,
@@ -128,13 +128,13 @@ fun PrimaryButton(
         modifier
             .height(52.dp)
             .clip(shape)
-            .then(if (enabled) Modifier.background(Neko.Pink, shape) else Modifier.glass(shape))
+            .then(if (enabled) Modifier.background(Neko.Accent, shape) else Modifier.glass(shape))
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(horizontal = 20.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val content = if (enabled) Neko.OnPink else Neko.TextMuted
+        val content = if (enabled) Neko.OnAccent else Neko.TextMuted
         if (icon != null) {
             Icon(icon, contentDescription = null, tint = content, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(8.dp))
@@ -156,7 +156,7 @@ fun Chip(label: String, selected: Boolean, destructive: Boolean = false, onClick
             .clip(shape)
             .then(
                 when {
-                    selected -> Modifier.background(Neko.Pink, shape)
+                    selected -> Modifier.background(Neko.Accent, shape)
                     destructive -> Modifier.glass(shape, tint = Neko.Error).border(1.dp, Neko.Error.copy(alpha = 0.6f), shape)
                     else -> Modifier.glass(shape)
                 },
@@ -166,13 +166,13 @@ fun Chip(label: String, selected: Boolean, destructive: Boolean = false, onClick
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (selected) {
-            Icon(Icons.Rounded.Check, contentDescription = null, tint = Neko.OnPink, modifier = Modifier.size(16.dp))
+            Icon(Icons.Rounded.Check, contentDescription = null, tint = Neko.OnAccent, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(4.dp))
         }
         Text(
             label,
             color = when {
-                selected -> Neko.OnPink
+                selected -> Neko.OnAccent
                 destructive -> Neko.Error
                 else -> Neko.TextSecondary
             },
@@ -197,10 +197,10 @@ fun SecondaryButton(text: String, icon: ImageVector?, modifier: Modifier = Modif
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (icon != null) {
-            Icon(icon, contentDescription = null, tint = Neko.Pink, modifier = Modifier.size(20.dp))
+            Icon(icon, contentDescription = null, tint = Neko.Accent, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(8.dp))
         }
-        Text(text, color = Neko.Pink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        Text(text, color = Neko.Accent, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -282,13 +282,13 @@ fun glassFieldColors() = OutlinedTextFieldDefaults.colors(
     focusedTextColor = Neko.Text,
     unfocusedTextColor = Neko.Text,
     disabledTextColor = Neko.TextMuted,
-    focusedBorderColor = Neko.Pink,
+    focusedBorderColor = Neko.Accent,
     unfocusedBorderColor = Neko.Border,
     focusedContainerColor = Neko.BackgroundDeep.copy(alpha = 0.5f),
     unfocusedContainerColor = Neko.BackgroundDeep.copy(alpha = 0.35f),
-    focusedLabelColor = Neko.Pink,
+    focusedLabelColor = Neko.Accent,
     unfocusedLabelColor = Neko.TextSecondary,
-    cursorColor = Neko.Pink,
+    cursorColor = Neko.Accent,
 )
 
 /** Glass card for secondary content nested inside a Base panel. */

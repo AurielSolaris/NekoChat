@@ -1,17 +1,23 @@
-// CPU (NEON) transformer kernels. Weights are f16 in [N][K] layout, activations f32, KV caches f16.
+// CPU (NEON) transformer kernels. Weights are [N][K] (f16 or FP8/FP4 blocks, see quant.h), activations f32,
+// KV caches f16.
 #pragma once
 
 #include <cstdint>
 
+#include "quant.h"
 #include "thread_pool.h"
 
 namespace neko::cpu {
 
 enum MatmulFlags { kGelu = 1, kAccumulate = 2 };
 
-// y[t][n] (+)= act(x[t] . W[n] + bias[n]) for t < T. bias may be null.
+// y[t][n] (+)= act(x[t] . W[n] + bias[n]) for t < T. bias may be null. N is the row stride of y.
 void matmulF16(ThreadPool& pool, const float* x, int T, int K, const uint16_t* W, const float* bias, float* y, int N,
                int flags);
+
+// Same for any weight format; W is [N][K].
+void matmul(ThreadPool& pool, const float* x, int T, int K, const QMatrix& W, const float* bias, float* y, int N,
+            int flags);
 
 void layerNorm(const float* x, float* y, const float* gamma, const float* beta, int T, int C, float eps);
 

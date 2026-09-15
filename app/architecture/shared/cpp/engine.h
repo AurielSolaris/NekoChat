@@ -25,7 +25,7 @@ struct GenerateStats {
 
 class Engine {
 public:
-    Engine(const std::string& modelDir, BackendPref pref, int threads, const ProgressFn& progress);
+    Engine(const std::string& modelDir, const LoadOptions& opt, const ProgressFn& progress);
 
     std::vector<int> tokenize(const std::string& text) const { return tokenizer_.encode(text); }
     const BpeTokenizer& tokenizer() const { return tokenizer_; }
@@ -35,18 +35,25 @@ public:
                            const std::function<bool(const std::string&)>& onText);
 
     void cancel() { cancel_.store(true); }
-    void resetCache() { cached_.clear(); }
+    void resetCache() { setCached(0); }
 
     int contextLength() const { return model_->contextLength(); }
     std::string infoJson() const;
+    // Safe from any thread while the engine is alive (reads the cache length atomically).
+    MemoryStats memory() const { return model_->memory(cachedCount_.load(std::memory_order_relaxed)); }
 
 private:
     bool isStop(int id) const;
+    void setCached(size_t n) {
+        cached_.resize(n);
+        cachedCount_.store(int(n), std::memory_order_relaxed);
+    }
 
     BpeTokenizer tokenizer_;
     std::unique_ptr<Model> model_;
     std::vector<int> stopIds_;  // end-of-text / end-of-turn tokens
     std::vector<int> cached_;   // tokens whose K/V are resident in the cache, in order
+    std::atomic<int> cachedCount_{0};
     std::vector<float> logits_;
     std::atomic<bool> cancel_{false};
 };

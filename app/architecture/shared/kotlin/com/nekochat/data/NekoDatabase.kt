@@ -49,6 +49,8 @@ object PrefKeys {
     const val SETUP_DONE = "setup_done"
     const val DOWNLOAD_DNS = "download_dns"
     const val DOWNLOAD_ENGINE = "download_engine"
+    const val WEIGHTS = "weights"
+    const val THEME = "theme"
 }
 
 /** In-memory view of the preferences table; writes go to Room in order on [writes]. */

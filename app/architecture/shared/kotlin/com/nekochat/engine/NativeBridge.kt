@@ -19,9 +19,12 @@ internal object NativeBridge {
         System.loadLibrary("nekochat")
     }
 
-    @JvmStatic external fun nativeLoad(dir: String, backend: Int, threads: Int, progress: LoadProgress?): Long
+    @JvmStatic external fun nativeLoad(dir: String, backend: Int, threads: Int, weights: Int, progress: LoadProgress?): Long
     @JvmStatic external fun nativeRelease(handle: Long)
     @JvmStatic external fun nativeInfo(handle: Long): String
+
+    /** [weights, kvUsed, kvCapacity, kvResident, workspace] in bytes. Safe from any thread. */
+    @JvmStatic external fun nativeMemory(handle: Long): LongArray
     @JvmStatic external fun nativeContextLength(handle: Long): Int
     @JvmStatic external fun nativeTokenize(handle: Long, utf8: ByteArray): IntArray
     @JvmStatic external fun nativeCancel(handle: Long)

@@ -8,6 +8,8 @@
 
 #if defined(__aarch64__)
 #include <arm_neon.h>
+#include <asm/hwcap.h>
+#include <sys/auxv.h>
 #endif
 
 namespace neko::cpu {
@@ -120,6 +122,228 @@ void matmulF16(ThreadPool& pool, const float* x, int T, int K, const uint16_t* W
             }
         }
     });
+}
+
+namespace {
+
+#if defined(__aarch64__)
+inline float halfValue(uint16_t b) {
+    __fp16 h;
+    std::memcpy(&h, &b, 2);
+    return static_cast<float>(h);
+}
+
+inline void finishRow(const float* sums, int tn, int tc, int n, const float* bias, float* y, int N, int flags) {
+    const float b = bias ? bias[n] : 0.0f;
+    for (int t = 0; t < tn; t++) {
+        float v = sums[t] + b;
+        if (flags & kGelu) v = gelu(v);
+        float& dst = y[size_t(tc + t) * size_t(N) + size_t(n)];
+        dst = (flags & kAccumulate) ? dst + v : v;
+    }
+}
+
+// 16 FP8 (E4M3) codes -> 16 floats (value / 256). The f16 pattern sign << 15 | (code & 0x7F) << 7 has the
+// high byte sign | (code & 0x7E) >> 1 and the low byte code << 7; a zip interleaves them into halves.
+inline void fp8x16(const uint8_t* p, float32x4_t w[4]) {
+    uint8x16_t q = vld1q_u8(p);
+    uint8x16_t hi = vbslq_u8(vdupq_n_u8(0x80), q, vshrq_n_u8(vshlq_n_u8(q, 1), 2));
+    uint8x16_t lo = vshlq_n_u8(q, 7);
+    float16x8_t a = vreinterpretq_f16_u8(vzip1q_u8(lo, hi)), b = vreinterpretq_f16_u8(vzip2q_u8(lo, hi));
+    w[0] = vcvt_f32_f16(vget_low_f16(a));
+    w[1] = vcvt_high_f32_f16(a);
+    w[2] = vcvt_f32_f16(vget_low_f16(b));
+    w[3] = vcvt_high_f32_f16(b);
+}
+
+inline float32x4_t dotBlock(const float32x4_t w[8], const float* xt) {
+    float32x4_t p = vmulq_f32(w[0], vld1q_f32(xt));
+    float32x4_t q = vmulq_f32(w[1], vld1q_f32(xt + 4));
+    p = vfmaq_f32(p, w[2], vld1q_f32(xt + 8));
+    q = vfmaq_f32(q, w[3], vld1q_f32(xt + 12));
+    p = vfmaq_f32(p, w[4], vld1q_f32(xt + 16));
+    q = vfmaq_f32(q, w[5], vld1q_f32(xt + 20));
+    p = vfmaq_f32(p, w[6], vld1q_f32(xt + 24));
+    q = vfmaq_f32(q, w[7], vld1q_f32(xt + 28));
+    return vaddq_f32(p, q);
+}
+
+// FP8: every block is decoded once per row and applied to all T tokens (prefill does not decode a row once per
+// token); decode (T = 1) keeps its accumulator in a register.
+void matmulFp8(ThreadPool& pool, const float* x, int T, int K, const QMatrix& W, const float* bias, float* y, int N,
+               int flags) {
+    constexpr int kTile = 64;
+    const int nb = K / kQuantBlock;
+    pool.parallelFor(W.rows, [&](int n0, int n1, int) {
+        float32x4_t acc[kTile];
+        float sums[kTile];
+        for (int n = n0; n < n1; n++) {
+            const uint8_t* row = W.row(n);
+            const uint16_t* scales = reinterpret_cast<const uint16_t*>(row + size_t(K));
+            if (T == 1) {
+                float32x4_t a = vdupq_n_f32(0);
+                for (int blk = 0; blk < nb; blk++) {
+                    float32x4_t w[8];
+                    fp8x16(row + size_t(blk) * kQuantBlock, w);
+                    fp8x16(row + size_t(blk) * kQuantBlock + 16, w + 4);
+                    a = vfmaq_n_f32(a, dotBlock(w, x + size_t(blk) * kQuantBlock), halfValue(scales[blk]));
+                }
+                sums[0] = vaddvq_f32(a) * kFp8Factor;
+                finishRow(sums, 1, 0, n, bias, y, N, flags);
+                continue;
+            }
+            for (int tc = 0; tc < T; tc += kTile) {
+                const int tn = std::min(kTile, T - tc);
+                for (int t = 0; t < tn; t++) acc[t] = vdupq_n_f32(0);
+                for (int blk = 0; blk < nb; blk++) {
+                    float32x4_t w[8];
+                    fp8x16(row + size_t(blk) * kQuantBlock, w);
+                    fp8x16(row + size_t(blk) * kQuantBlock + 16, w + 4);
+                    const float s = halfValue(scales[blk]);
+                    const float* xb = x + size_t(tc) * size_t(K) + size_t(blk) * kQuantBlock;
+                    for (int t = 0; t < tn; t++) acc[t] = vfmaq_n_f32(acc[t], dotBlock(w, xb + size_t(t) * size_t(K)), s);
+                }
+                for (int t = 0; t < tn; t++) sums[t] = vaddvq_f32(acc[t]) * kFp8Factor;
+                finishRow(sums, tn, tc, n, bias, y, N, flags);
+            }
+        }
+    });
+}
+
+// FP4 runs in integers: activations are quantized per 32-block to int8 (scale = max / 127), codes map to twice
+// their value ({0, ±1, ±2, ±3, ±4, ±6, ±8, ±12}), and each block is one int8 dot product scaled by
+// weightScale / 2 * activationScale. The dot product uses SDOT where the core has it (ARMv8.2 dotprod).
+struct Int8Rows {
+    std::vector<int8_t> q;
+    std::vector<float> s;
+};
+
+void quantizeActivations(const float* x, int T, int K, Int8Rows& out) {
+    const int nb = K / kQuantBlock;
+    out.q.resize(size_t(T) * size_t(K));
+    out.s.resize(size_t(T) * size_t(nb));
+    for (int t = 0; t < T; t++) {
+        for (int b = 0; b < nb; b++) {
+            const float* xb = x + size_t(t) * size_t(K) + size_t(b) * kQuantBlock;
+            float32x4_t v[8];
+            float32x4_t m = vdupq_n_f32(0);
+            for (int i = 0; i < 8; i++) {
+                v[i] = vld1q_f32(xb + 4 * i);
+                m = vmaxq_f32(m, vabsq_f32(v[i]));
+            }
+            const float amax = vmaxvq_f32(m);
+            const float s = amax / 127.0f;
+            const float inv = s > 0 ? 1.0f / s : 0.0f;
+            out.s[size_t(t) * size_t(nb) + size_t(b)] = s;
+            int8_t* qb = out.q.data() + size_t(t) * size_t(K) + size_t(b) * kQuantBlock;
+            for (int i = 0; i < 8; i += 2) {
+                int32x4_t a = vcvtnq_s32_f32(vmulq_n_f32(v[i], inv));
+                int32x4_t c = vcvtnq_s32_f32(vmulq_n_f32(v[i + 1], inv));
+                int16x8_t h = vcombine_s16(vqmovn_s32(a), vqmovn_s32(c));
+                vst1_s8(qb + 4 * i, vqmovn_s16(h));
+            }
+        }
+    }
+}
+
+const int8_t kFp4Twice[16] = {0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12};
+
+inline int32x4_t dotI8Mull(int8x16_t w0, int8x16_t x0, int8x16_t w1, int8x16_t x1) {
+    // |products| <= 12 * 127, so two of them still fit in int16.
+    int16x8_t p0 = vmlal_high_s8(vmull_s8(vget_low_s8(w0), vget_low_s8(x0)), w0, x0);
+    int16x8_t p1 = vmlal_high_s8(vmull_s8(vget_low_s8(w1), vget_low_s8(x1)), w1, x1);
+    return vpadalq_s16(vpaddlq_s16(p0), p1);
+}
+
+__attribute__((target("dotprod"))) inline int32x4_t dotI8Sdot(int8x16_t w0, int8x16_t x0, int8x16_t w1,
+                                                              int8x16_t x1) {
+    return vdotq_s32(vdotq_s32(vdupq_n_s32(0), w0, x0), w1, x1);
+}
+
+template <bool kSdot>
+__attribute__((target("dotprod"))) void matmulFp4Rows(const Int8Rows& xq, int T, int K, const QMatrix& W,
+                                                      const float* bias, float* y, int N, int flags, int n0, int n1) {
+    constexpr int kTile = 64;
+    const int nb = K / kQuantBlock;
+    const int8x16_t table = vld1q_s8(kFp4Twice);
+    const uint8x16_t low = vdupq_n_u8(0x0F);
+    float32x4_t acc[kTile];
+    float sums[kTile];
+    for (int n = n0; n < n1; n++) {
+        const uint8_t* row = W.row(n);
+        const uint16_t* scales = reinterpret_cast<const uint16_t*>(row + size_t(K) / 2);
+        for (int tc = 0; tc < T; tc += kTile) {
+            const int tn = std::min(kTile, T - tc);
+            for (int t = 0; t < tn; t++) acc[t] = vdupq_n_f32(0);
+            for (int blk = 0; blk < nb; blk++) {
+                uint8x16_t c = vld1q_u8(row + size_t(blk) * (kQuantBlock / 2));
+                int8x16_t w0 = vqtbl1q_s8(table, vandq_u8(c, low));  // weights 0..15
+                int8x16_t w1 = vqtbl1q_s8(table, vshrq_n_u8(c, 4));  // weights 16..31
+                const float ws = halfValue(scales[blk]) * 0.5f;
+                for (int t = 0; t < tn; t++) {
+                    const size_t xi = size_t(tc + t) * size_t(K) + size_t(blk) * kQuantBlock;
+                    int8x16_t x0 = vld1q_s8(xq.q.data() + xi), x1 = vld1q_s8(xq.q.data() + xi + 16);
+                    int32x4_t d = kSdot ? dotI8Sdot(w0, x0, w1, x1) : dotI8Mull(w0, x0, w1, x1);
+                    acc[t] = vfmaq_n_f32(acc[t], vcvtq_f32_s32(d), ws * xq.s[size_t(tc + t) * size_t(nb) + size_t(blk)]);
+                }
+            }
+            for (int t = 0; t < tn; t++) sums[t] = vaddvq_f32(acc[t]);
+            finishRow(sums, tn, tc, n, bias, y, N, flags);
+        }
+    }
+}
+
+bool hasDotProd() {
+    static const bool has = (getauxval(AT_HWCAP) & HWCAP_ASIMDDP) != 0;
+    return has;
+}
+
+void matmulFp4(ThreadPool& pool, const float* x, int T, int K, const QMatrix& W, const float* bias, float* y, int N,
+               int flags) {
+    static thread_local Int8Rows buffer;
+    Int8Rows& xq = buffer;  // named reference: a lambda would otherwise see each worker's own thread_local
+    quantizeActivations(x, T, K, xq);
+    const bool sdot = hasDotProd();
+    pool.parallelFor(W.rows, [&](int n0, int n1, int) {
+        if (sdot) matmulFp4Rows<true>(xq, T, K, W, bias, y, N, flags, n0, n1);
+        else matmulFp4Rows<false>(xq, T, K, W, bias, y, N, flags, n0, n1);
+    });
+}
+#endif
+
+// Portable fallback: dequantize each row, then plain dot products.
+void matmulGeneric(ThreadPool& pool, const float* x, int T, int K, const QMatrix& W, const float* bias, float* y, int N,
+                   int flags) {
+    pool.parallelFor(W.rows, [&](int n0, int n1, int) {
+        std::vector<float> w(static_cast<size_t>(K));
+        for (int n = n0; n < n1; n++) {
+            W.dequantizeRow(n, w.data());
+            for (int t = 0; t < T; t++) {
+                const float* xt = x + size_t(t) * size_t(K);
+                float v = bias ? bias[n] : 0.0f;
+                for (int k = 0; k < K; k++) v += xt[k] * w[size_t(k)];
+                if (flags & kGelu) v = gelu(v);
+                float& dst = y[size_t(t) * size_t(N) + size_t(n)];
+                dst = (flags & kAccumulate) ? dst + v : v;
+            }
+        }
+    });
+}
+
+}  // namespace
+
+void matmul(ThreadPool& pool, const float* x, int T, int K, const QMatrix& W, const float* bias, float* y, int N,
+            int flags) {
+    if (W.cols != K) fail("matmul: weight width mismatch");
+    switch (W.format) {
+        case WeightFormat::F16: matmulF16(pool, x, T, K, W.f16(), bias, y, N, flags); return;
+#if defined(__aarch64__)
+        case WeightFormat::FP8: matmulFp8(pool, x, T, K, W, bias, y, N, flags); return;
+        case WeightFormat::FP4: matmulFp4(pool, x, T, K, W, bias, y, N, flags); return;
+#else
+        default: matmulGeneric(pool, x, T, K, W, bias, y, N, flags); return;
+#endif
+    }
 }
 
 void layerNorm(const float* x, float* y, const float* g, const float* b, int T, int C, float eps) {

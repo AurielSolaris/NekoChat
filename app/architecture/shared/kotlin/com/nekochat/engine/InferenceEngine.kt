@@ -1,6 +1,8 @@
 package com.nekochat.engine
 
 import android.os.Process
+import android.system.Os
+import android.system.OsConstants
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -17,12 +19,35 @@ enum class ComputeBackend(val id: Int, val label: String) {
     CPU(3, "CPU"),
 }
 
+/** How weights are stored in memory. ids match neko::WeightFormat. */
+enum class WeightPrecision(val id: Int, val label: String, val detail: String) {
+    FP16(0, "FP16", "Full quality and the most memory: the precision the model ships in."),
+    FP8(1, "FP8", "About half the memory with nearly the same answers. A good pick for bigger models."),
+    FP4(2, "FP4", "About a quarter of the memory and the fastest on the CPU. Answers change noticeably, " +
+        "most of all on small models."),
+}
+
+/** Memory held by the loaded model, plus the whole app's resident memory for context. */
+data class MemoryUsage(
+    val weights: Long,
+    val kvUsed: Long,
+    val kvCapacity: Long,
+    val kvResident: Long,
+    val workspace: Long,
+    val appResident: Long,
+) {
+    /** Weights, KV cache and activations: what the model itself occupies right now. */
+    val model: Long get() = weights + kvResident + workspace
+}
+
 data class EngineInfo(
     val architecture: String,
     val backend: String,
     val device: String,
     val note: String,
     val format: String,
+    /** Precision the weights are stored in ("FP8", or "FP8 + FP16" when some matrices couldn't be quantized). */
+    val weights: String,
     val parameters: Long,
     val layers: Int,
     val contextLength: Int,
@@ -36,6 +61,7 @@ data class EngineInfo(
                 device = o.optString("device"),
                 note = o.optString("note").trim(),
                 format = o.optString("format"),
+                weights = o.optString("weights"),
                 parameters = o.optLong("params"),
                 layers = o.optInt("layers"),
                 contextLength = o.optInt("context"),
@@ -88,11 +114,15 @@ class StreamBuffer {
  * Owns the dedicated inference thread. The UI thread (and Android's RenderThread) never run
  * model code: every native call is marshalled onto "neko-inference", which also owns the
  * Vulkan / EGL context. Native CPU kernels fan out to a worker pool pinned to the big cores.
+ *
+ * The inference thread and the native workers run at nice [INFERENCE_NICE]: below the UI, its
+ * RenderThread and the keyboard, so typing stays smooth while a model generates, but under 10,
+ * where Android would move them to the background cgroup (little cores only).
  */
 class InferenceEngine : Closeable {
     private val executor = Executors.newSingleThreadExecutor { r ->
         Thread(null, {
-            Process.setThreadPriority(Process.THREAD_PRIORITY_DEFAULT)
+            Process.setThreadPriority(INFERENCE_NICE)
             r.run()
         }, "neko-inference", 8L shl 20)
     }
@@ -105,13 +135,26 @@ class InferenceEngine : Closeable {
     suspend fun load(
         modelDir: File,
         backend: ComputeBackend,
+        precision: WeightPrecision,
         onProgress: (Float, String) -> Unit,
     ): EngineInfo = withContext(dispatcher) {
         releaseOnThread()
-        val h = NativeBridge.nativeLoad(modelDir.absolutePath, backend.id, 0) { f, s -> onProgress(f, s) }
+        val h = NativeBridge.nativeLoad(modelDir.absolutePath, backend.id, 0, precision.id) { f, s -> onProgress(f, s) }
         synchronized(handleLock) { handle = h }
         EngineInfo.parse(NativeBridge.nativeInfo(h))
     }
+
+    /** Current memory use, or null without a model. Safe from any thread, including during generation. */
+    fun memory(): MemoryUsage? {
+        val m = synchronized(handleLock) { if (handle != 0L) NativeBridge.nativeMemory(handle) else null } ?: return null
+        return MemoryUsage(m[0], m[1], m[2], m[3], m[4], appResidentBytes())
+    }
+
+    private fun appResidentBytes(): Long = runCatching {
+        // statm: size resident shared ... (in pages)
+        val pages = File("/proc/self/statm").readText().trim().split(' ')[1].toLong()
+        pages * Os.sysconf(OsConstants._SC_PAGESIZE)
+    }.getOrDefault(0L)
 
     suspend fun contextLength(): Int = withContext(dispatcher) { NativeBridge.nativeContextLength(requireHandle()) }
 
@@ -154,6 +197,11 @@ class InferenceEngine : Closeable {
     }
 
     private fun requireHandle(): Long = handle.takeIf { it != 0L } ?: error("No model loaded")
+
+    companion object {
+        /** Matches kWorkerNice in thread_pool.h. */
+        const val INFERENCE_NICE = 4
+    }
 
     private fun releaseOnThread() {
         val h = synchronized(handleLock) { handle.also { handle = 0L } }

@@ -123,7 +123,7 @@ private fun LicenseDialog(title: String, asset: String, onDismiss: () -> Unit) {
         confirmButton = {
             Row {
                 TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) {
-                    Text("Close", color = Neko.Pink, fontWeight = FontWeight.SemiBold)
+                    Text("Close", color = Neko.Accent, fontWeight = FontWeight.SemiBold)
                 }
             }
         },

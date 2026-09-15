@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.sp
 import com.nekochat.data.Conversation
 import com.nekochat.data.Role
 import com.nekochat.engine.Persona
+import com.nekochat.engine.formatBytes
 import com.nekochat.ui.theme.GlassLevel
 import com.nekochat.ui.theme.Neko
 import com.nekochat.ui.theme.NekoRadius
@@ -80,9 +81,15 @@ fun ChatScreen(vm: ChatViewModel) {
             .imePadding()
             .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
-        val subtitle = when (load) {
-            is LoadState.Ready -> listOfNotNull((load as LoadState.Ready).info.backend, vm.lastSpeed).joinToString(" · ")
-            else -> loadSummary(load)
+        val memory by vm.memory.collectAsState()
+        val subtitle = when (val s = load) {
+            is LoadState.Ready -> listOfNotNull(
+                s.info.backend,
+                s.info.weights.ifEmpty { null },
+                vm.lastSpeed,
+                memory?.let { formatBytes(it.model) },
+            ).joinToString(" · ")
+            else -> loadSummary(s)
         }
         var confirmClear by remember { mutableStateOf(false) }
         GlassTopBar(chat.title, subtitle, onBack = vm::back, backLabel = "Back to chats") {
@@ -186,7 +193,7 @@ private fun Message(role: Role, text: String, modifier: Modifier = Modifier, typ
         horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
     ) {
         if (role == Role.Assistant) {
-            Text(Persona.NAME, color = Neko.Pink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+            Text(Persona.NAME, color = Neko.Accent, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(start = 6.dp, bottom = 4.dp))
         }
         val shape = RoundedCornerShape(NekoRadius.XLarge)
@@ -195,8 +202,8 @@ private fun Message(role: Role, text: String, modifier: Modifier = Modifier, typ
                 .widthIn(max = 300.dp)
                 .then(
                     when (role) {
-                        Role.User -> Modifier.glass(shape, level = GlassLevel.Elevated, tint = Neko.Pink)
-                            .background(Neko.Pink.copy(alpha = 0.14f), shape)
+                        Role.User -> Modifier.glass(shape, level = GlassLevel.Elevated, tint = Neko.Accent)
+                            .background(Neko.Accent.copy(alpha = 0.14f), shape)
                         Role.Assistant -> Modifier.glass(shape)
                         Role.Error -> Modifier.glass(shape, tint = Neko.Error)
                     },
@@ -224,7 +231,7 @@ private fun TypingDots() {
                 animationSpec = infiniteRepeatable(tween(480, delayMillis = i * 150), RepeatMode.Reverse),
                 label = "dot$i",
             )
-            Box(Modifier.size(7.dp).alpha(a).clip(CircleShape).background(Neko.PinkLight))
+            Box(Modifier.size(7.dp).alpha(a).clip(CircleShape).background(Neko.AccentLight))
         }
     }
 }
@@ -258,7 +265,7 @@ private fun InputBar(vm: ChatViewModel, enabled: Boolean) {
                 enabled = enabled,
                 maxLines = 5,
                 textStyle = TextStyle(color = Neko.Text, fontSize = 16.sp, lineHeight = 22.sp),
-                cursorBrush = SolidColor(Neko.Pink),
+                cursorBrush = SolidColor(Neko.Accent),
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { send() }),
                 modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused },
@@ -270,15 +277,15 @@ private fun InputBar(vm: ChatViewModel, enabled: Boolean) {
             Modifier
                 .size(48.dp)
                 .clip(CircleShape)
-                .background(if (active) Neko.Pink else Neko.SurfaceElevated, CircleShape)
+                .background(if (active) Neko.Accent else Neko.SurfaceElevated, CircleShape)
                 .clickable(enabled = active, role = SemanticsRole.Button) { if (generating) vm.stop() else send() },
             contentAlignment = Alignment.Center,
         ) {
             if (generating) {
-                Box(Modifier.size(14.dp).clip(RoundedCornerShape(3.dp)).background(Neko.OnPink))
+                Box(Modifier.size(14.dp).clip(RoundedCornerShape(3.dp)).background(Neko.OnAccent))
             } else {
                 Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = "Send",
-                    tint = if (active) Neko.OnPink else Neko.TextMuted, modifier = Modifier.size(22.dp))
+                    tint = if (active) Neko.OnAccent else Neko.TextMuted, modifier = Modifier.size(22.dp))
             }
         }
     }
@@ -302,7 +309,7 @@ private fun LoadingCard(s: LoadState.Loading) {
             LinearProgressIndicator(
                 progress = { s.progress },
                 modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
-                color = Neko.Pink,
+                color = Neko.Accent,
                 trackColor = Neko.Border,
                 drawStopIndicator = {},
             )

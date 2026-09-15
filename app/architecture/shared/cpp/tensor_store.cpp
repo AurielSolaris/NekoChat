@@ -5,6 +5,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <cmath>
+
 #include "common.h"
 #include "json.h"
 
@@ -34,6 +36,7 @@ const char* dtypeName(DType t) {
         case DType::I8: return "I8";
         case DType::U8: return "U8";
         case DType::Bool: return "BOOL";
+        case DType::F8E4M3: return "F8_E4M3";
     }
     return "?";
 }
@@ -85,6 +88,7 @@ static DType parseSafetensorsDtype(const std::string& s) {
     if (s == "I8") return DType::I8;
     if (s == "U8") return DType::U8;
     if (s == "BOOL") return DType::Bool;
+    if (s == "F8_E4M3") return DType::F8E4M3;
     fail("unsupported safetensors dtype " + s);
 }
 
@@ -226,6 +230,7 @@ DType storageDtype(const std::string& name) {
     if (name == "CharStorage") return DType::I8;
     if (name == "ByteStorage") return DType::U8;
     if (name == "BoolStorage") return DType::Bool;
+    if (name == "Float8_e4m3fnStorage") return DType::F8E4M3;
     fail("unsupported torch storage type " + name);
 }
 
@@ -473,10 +478,84 @@ static float loadAsF32(const TensorView& v, int64_t i) {
     }
 }
 
+bool TensorStore::isQuantScale(const std::string& name) {
+    return ends_with(name, ".weight_scale_inv") || ends_with(name, ".weight_scale") || ends_with(name, ".input_scale");
+}
+
+RowSource TensorStore::rows(const std::string& name) const {
+    const TensorView& v = get(name);
+    if (v.shape.size() != 2) fail("expected a 2-D weight: " + name);
+    RowSource s;
+    s.rows = int(v.shape[0]);
+    s.cols = int(v.shape[1]);
+    const size_t C = size_t(v.shape[1]);
+    const uint8_t* base = v.data;
+    switch (v.dtype) {
+        case DType::F32:
+            s.read = [base, C](int r, float* out) { std::memcpy(out, base + size_t(r) * C * 4, C * 4); };
+            break;
+        case DType::F16:
+            s.read = [base, C](int r, float* out) {
+                const uint16_t* p = reinterpret_cast<const uint16_t*>(base) + size_t(r) * C;
+                size_t i = 0;
+#if defined(__aarch64__)
+                for (; i + 4 <= C; i += 4) vst1q_f32(out + i, vcvt_f32_f16(vreinterpret_f16_u16(vld1_u16(p + i))));
+#endif
+                for (; i < C; i++) out[i] = f16_to_f32(p[i]);
+            };
+            break;
+        case DType::BF16:
+            s.read = [base, C](int r, float* out) {
+                const uint16_t* p = reinterpret_cast<const uint16_t*>(base) + size_t(r) * C;
+                size_t i = 0;
+#if defined(__aarch64__)
+                for (; i + 4 <= C; i += 4) vst1q_f32(out + i, vreinterpretq_f32_u32(vshll_n_u16(vld1_u16(p + i), 16)));
+#endif
+                for (; i < C; i++) out[i] = bf16_to_f32(p[i]);
+            };
+            break;
+        case DType::F8E4M3: {
+            std::string scaleName = has(name + "_scale_inv") ? name + "_scale_inv" : name + "_scale";
+            if (!has(scaleName)) fail("FP8 weight without a scale tensor: " + name);
+            const TensorView& sv = get(scaleName);
+            const int64_t sR = sv.shape.size() >= 1 ? sv.shape[0] : 1;
+            const int64_t sC = sv.shape.size() >= 2 ? sv.shape[1] : 1;
+            if (sR * sC != sv.numel()) fail("unsupported scale shape for " + name);
+            // Block size per axis: 128 x 128 for DeepSeek/Qwen style checkpoints, else whatever divides the shape.
+            auto blockOf = [](int64_t n, int64_t parts) {
+                if (parts <= 1) return n;
+                if ((n + 127) / 128 == parts) return int64_t(128);
+                return (n + parts - 1) / parts;
+            };
+            const int64_t bR = blockOf(v.shape[0], sR), bC = blockOf(int64_t(C), sC);
+            auto scales = std::make_shared<std::vector<float>>(size_t(sv.numel()));
+            for (int64_t i = 0; i < sv.numel(); i++) (*scales)[size_t(i)] = loadAsF32(sv, i);
+            // OCP E4M3 ("e4m3fn"): bias 7, no infinities.
+            auto lut = std::make_shared<std::vector<float>>(256);
+            for (int c = 0; c < 256; c++) {
+                int e = (c >> 3) & 15, m = c & 7;
+                float mag = e == 0 ? std::ldexp(float(m) / 8.0f, -6) : std::ldexp(1.0f + float(m) / 8.0f, e - 7);
+                (*lut)[size_t(c)] = (c & 0x80) ? -mag : mag;
+            }
+            s.read = [base, C, scales, lut, sC, bR, bC](int r, float* out) {
+                const uint8_t* p = base + size_t(r) * C;
+                const float* srow = scales->data() + size_t(r / bR) * size_t(sC);
+                for (size_t c = 0; c < C; c++) out[c] = (*lut)[p[c]] * srow[c / size_t(bC)];
+            };
+            break;
+        }
+        default: fail(std::string("tensor is not floating point: ") + dtypeName(v.dtype));
+    }
+    return s;
+}
+
 std::vector<float> TensorStore::toF32(const std::string& name) const {
     const TensorView& v = get(name);
     std::vector<float> out(size_t(v.numel()));
-    if (v.dtype == DType::F32) {
+    if (v.dtype == DType::F8E4M3) {
+        RowSource s = rows(name);
+        for (int r = 0; r < s.rows; r++) s.read(r, out.data() + size_t(r) * size_t(s.cols));
+    } else if (v.dtype == DType::F32) {
         std::memcpy(out.data(), v.data, out.size() * 4);
     } else {
         for (int64_t i = 0; i < v.numel(); i++) out[size_t(i)] = loadAsF32(v, i);
@@ -487,6 +566,14 @@ std::vector<float> TensorStore::toF32(const std::string& name) const {
 std::vector<uint16_t> TensorStore::toF16(const std::string& name, bool transpose2d) const {
     const TensorView& v = get(name);
     std::vector<uint16_t> out(size_t(v.numel()));
+    if (v.dtype == DType::F8E4M3) {
+        std::vector<float> f = toF32(name);
+        const int64_t R = v.shape[0], C = v.shape[1];
+        for (int64_t r = 0; r < R; r++)
+            for (int64_t c = 0; c < C; c++)
+                out[size_t(transpose2d ? c * R + r : r * C + c)] = f32_to_f16(f[size_t(r * C + c)]);
+        return out;
+    }
     if (!transpose2d) {
         if (v.dtype == DType::F16) {
             std::memcpy(out.data(), v.data, out.size() * 2);

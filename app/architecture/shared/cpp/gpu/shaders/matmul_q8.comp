@@ -1,0 +1,77 @@
+// matmul.comp for FP8 (E4M3) weights. Row layout (quant.h): K/16 uvec4 of codes (16 weights each), then the
+// K/32 f16 block scales, 8 per uvec4. Same parameters and dispatch as matmul.comp; K % 32 == 0.
+layout(local_size_x = 64) in;
+BUF(0) readonly buffer X { vec4 xv[]; };
+BUF(1) readonly buffer W { uvec4 w[]; };
+BUF(2) readonly buffer Bias { float bias[]; };
+BUF(3) buffer Y { float y[]; };
+
+shared vec4 red[64];
+
+float gelu(float v) {
+    float u = clamp(0.7978845608 * (v + 0.044715 * v * v * v), -15.0, 15.0);
+    return 0.5 * v * (1.0 + tanh(u));
+}
+
+// Four codes -> values / 256. In 16-bit lanes code c becomes the f16 bit pattern (c + (c & 0x80)) << 7, i.e.
+// (c & 0x7F) << 7 with the sign carried from bit 14 into bit 15. Even and odd bytes go through separately.
+vec4 fp8x4(uint q) {
+    uint e = q & 0x00FF00FFu;
+    uint o = (q >> 8) & 0x00FF00FFu;
+    vec2 a = unpackHalf2x16((e + (e & 0x00800080u)) << 7);  // codes 0 and 2
+    vec2 b = unpackHalf2x16((o + (o & 0x00800080u)) << 7);  // codes 1 and 3
+    return vec4(a.x, b.x, a.y, b.y);
+}
+
+void main() {
+    int K = PA.x, N = PA.y, T = PA.z, flags = PA.w;
+    int n = int(gl_WorkGroupID.x);
+    int t0 = int(gl_WorkGroupID.y) * 4;
+    int l = int(gl_LocalInvocationID.x);
+    int K4 = K >> 2;
+    int K16 = K >> 4;
+    int base = n * (K16 + ((K >> 5) + 7) / 8);
+    int nt = min(4, T - t0);
+    int x0 = (PB.x + t0) * K4;
+
+    vec4 acc = vec4(0.0);
+    for (int i = l; i < K16; i += 64) {
+        uvec4 q = w[base + i];
+        int b = i >> 1;
+        uvec4 sv = w[base + K16 + (b >> 3)];
+        uint sw = sv[(b >> 1) & 3];
+        float s = halfAt(sw, uint(b));
+        vec4 w0 = fp8x4(q.x), w1 = fp8x4(q.y), w2 = fp8x4(q.z), w3 = fp8x4(q.w);
+        int xi = x0 + 4 * i;
+        acc.x += s * (dot(xv[xi], w0) + dot(xv[xi + 1], w1) + dot(xv[xi + 2], w2) + dot(xv[xi + 3], w3));
+        if (nt > 1) {
+            int xj = xi + K4;
+            acc.y += s * (dot(xv[xj], w0) + dot(xv[xj + 1], w1) + dot(xv[xj + 2], w2) + dot(xv[xj + 3], w3));
+        }
+        if (nt > 2) {
+            int xj = xi + 2 * K4;
+            acc.z += s * (dot(xv[xj], w0) + dot(xv[xj + 1], w1) + dot(xv[xj + 2], w2) + dot(xv[xj + 3], w3));
+        }
+        if (nt > 3) {
+            int xj = xi + 3 * K4;
+            acc.w += s * (dot(xv[xj], w0) + dot(xv[xj + 1], w1) + dot(xv[xj + 2], w2) + dot(xv[xj + 3], w3));
+        }
+    }
+    red[l] = acc;
+    memoryBarrierShared();
+    barrier();
+    for (int s = 32; s > 0; s >>= 1) {
+        if (l < s) red[l] += red[l + s];
+        memoryBarrierShared();
+        barrier();
+    }
+    if (l < nt) {
+        vec4 r = red[0] * 256.0;
+        float v = l == 0 ? r.x : l == 1 ? r.y : l == 2 ? r.z : r.w;
+        if ((flags & 4) != 0) v += bias[n];
+        if ((flags & 1) != 0) v = gelu(v);
+        int yi = (t0 + l) * N + PB.y + n;
+        if ((flags & 2) != 0) v += y[yi];
+        y[yi] = v;
+    }
+}

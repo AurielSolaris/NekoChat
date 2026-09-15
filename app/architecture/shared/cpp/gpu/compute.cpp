@@ -6,6 +6,7 @@
 
 #include "../common.h"
 #include "../cpu_ops.h"
+#include "../quant.h"
 
 namespace neko::gpu {
 
@@ -209,6 +210,50 @@ bool selfTest(ComputeBackend& be, std::string& error) {
             run(Kernel::SiluMul, {be.create(h.size() * 4, h.data()), bo}, {T, I}, uint32_t((I + 63) / 64), T);
             be.submitAndWait();
             if (!close(read(bo, ref.size()), ref, 1e-4f, error, "silu_mul")) return false;
+        }
+
+        // FP8 / FP4 block weights (quant.h) against a dequantized reference: bias + accumulate + output offset,
+        // K = 96 (odd block count, idle threads) and K = 1024 (several passes per thread), T = 5.
+        for (WeightFormat f : {WeightFormat::FP8, WeightFormat::FP4}) {
+            for (int K : {96, 1024}) {
+                const int N = 37, T = 5, nOff = 3, NS = N + 5;
+                auto x = rnd(size_t(T * K)), bias = rnd(size_t(N)), wf = rnd(size_t(N * K)), y0 = rnd(size_t(T * NS));
+                QMatrix w = quantizeMatrix(f, N, K, [&](int r, float* out) {
+                    std::copy(wf.begin() + long(r) * K, wf.begin() + long(r + 1) * K, out);
+                }, nullptr);
+                std::vector<float> ref = y0, row(static_cast<size_t>(K));
+                for (int n = 0; n < N; n++) {
+                    w.dequantizeRow(n, row.data());
+                    for (int t = 0; t < T; t++) {
+                        float s = bias[size_t(n)];
+                        for (int k = 0; k < K; k++) s += x[size_t(t * K + k)] * row[size_t(k)];
+                        ref[size_t(t * NS + nOff + n)] += s;
+                    }
+                }
+                Buffer* by = be.create(y0.size() * 4, y0.data(), true);
+                be.begin();
+                run(f == WeightFormat::FP8 ? Kernel::MatmulQ8 : Kernel::MatmulQ4,
+                    {be.create(x.size() * 4, x.data()), be.create(w.bytes(), w.data.data()),
+                     be.create(bias.size() * 4, bias.data()), by},
+                    {K, NS, T, 4 | 2, 0, nOff}, uint32_t(N), uint32_t((T + 3) / 4));
+                be.submitAndWait();
+                if (!close(read(by, ref.size()), ref, 2e-3f, error, weightFormatName(f))) return false;
+            }
+            // Embedding gather from a quantized table.
+            const int EV = 10, EC = 64, ET = 3;
+            auto table = rnd(size_t(EV * EC));
+            QMatrix q = quantizeMatrix(f, EV, EC, [&](int r, float* out) {
+                std::copy(table.begin() + long(r) * EC, table.begin() + long(r + 1) * EC, out);
+            }, nullptr);
+            int32_t toks[ET] = {3, 7, 9};
+            std::vector<float> ref(size_t(ET * EC));
+            for (int t = 0; t < ET; t++) q.dequantizeRow(toks[t], ref.data() + t * EC);
+            Buffer* out = be.create(ref.size() * 4, nullptr, true);
+            be.begin();
+            run(Kernel::Embed, {be.create(sizeof toks, toks), be.create(q.bytes(), q.data.data()), nullptr, out},
+                {ET, EC, 0, f == WeightFormat::FP8 ? 2 : 4, 0, EV, int(q.rowBytes / 4)}, 1, ET);
+            be.submitAndWait();
+            if (!close(read(out, ref.size()), ref, 1e-5f, error, "embed-quantized")) return false;
         }
 
         // kv_store + grouped-query attention over f16 caches. pos0 > 1024 exercises the tiled softmax.

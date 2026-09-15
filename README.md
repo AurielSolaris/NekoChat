@@ -28,8 +28,13 @@
   <tr>
     <td align="center"><img src="docs/screenshots/8-confirm-clear.png" alt="Confirmation before clearing a chat" width="200"><br><sub><b>Destructive actions</b> ask first</sub></td>
     <td align="center"><img src="docs/screenshots/9-downloader-settings.png" alt="Downloader choice in Settings" width="200"><br><sub><b>Downloader</b>: aria2 or Fetch</sub></td>
+    <td align="center"><img src="docs/screenshots/10-memory.png" alt="Memory in use in Settings" width="200"><br><sub><b>Memory</b>: what the model uses</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/11-precision-theme.png" alt="Weight precision chips" width="200"><br><sub><b>Weight precision</b>: FP16 / FP8 / FP4</sub></td>
+    <td align="center"><img src="docs/screenshots/12-themes.png" alt="Theme page with Rose and Ocean" width="200"><br><sub><b>Themes</b>: Rose and Ocean</sub></td>
     <td align="center" width="200"><sub>Screenshots: Samsung Galaxy M31 (Exynos 9611, Mali-G72), release build, Qwen3-0.6B loaded
-      from a folder picked with the system picker and running on Vulkan.</sub></td>
+      from a folder picked with the system picker.</sub></td>
   </tr>
 </table>
 
@@ -64,8 +69,14 @@ framework dependencies. It uses Vulkan, OpenGL ES or the CPU, whichever the devi
 - **GPU switching.** *Auto* tries Vulkan, then OpenGL ES 3.1, then CPU (NEON). A backend is used
   only after it passes a numerical self-test against the CPU kernels, and failures fall through
   to the next one.
+- **Weight precision: FP16, FP8 or FP4** (*Settings → Weight precision*). Weights are quantized
+  while the model loads, in blocks of 32 with one f16 scale each; FP8 checkpoints load directly.
+  FP8 halves the memory with nearly identical answers; FP4 quarters it and is the fastest on the CPU.
+- **Memory indicator:** Settings shows what the model occupies (weights, chat memory, buffers,
+  whole app); the chat header shows backend, precision, speed and memory.
+- **Themes:** NekoChat **Rose** (default) and NekoChat **Ocean** (Solarized Dark with pastel blues).
 - **KV-cache prefix reuse** across turns: only new tokens are processed.
-- **One Dark + pastel-pink glass UI** with the maneki-neko mascot, built to stay cheap (see *Rendering*).
+- **Glass UI** with the maneki-neko mascot, built to stay cheap (see *Rendering*).
 
 ## Adding a model
 
@@ -196,13 +207,18 @@ app/
 |--------|------|
 | **main** (UI) | Compose state and layout. Never runs model code. |
 | **RenderThread** (HWUI) | GPU rendering of the UI. |
-| **neko-inference** | Every JNI call: load, tokenize, generate. Owns the Vulkan device / EGL context. |
-| **native workers** | CPU matmul/attention workers, pinned to the performance cores (big/prime cluster). |
+| **neko-inference** | Every JNI call: load, tokenize, generate. Owns the Vulkan device / EGL context. Nice 4. |
+| **native workers** | CPU matmul/attention workers, pinned to the performance cores (big/prime cluster, found via `cpu_capacity`). Nice 4; at least two cores always stay free. |
 | **IO (serial)** | Room writes, in order; the download service's state machine. |
 | **aria2c** (child process) | Network transfers, driven over local JSON-RPC. |
 
 Tokens reach the UI through a lock-free `StreamBuffer`. The chat screen samples it once per frame
 (`withFrameNanos`), so a fast model can never cause more than one recomposition per vsync.
+Memory stats are read with an atomic, lock-free native call, never through the busy inference thread.
+
+The inference threads run at nice 4: below the UI, the RenderThread and the keyboard, so typing
+stays smooth on the CPU backend while a model generates (measured: frame times stay at the idle
+baseline on a Galaxy M31). Nice 10 and above would move them to the little cores.
 
 ## GPU backends
 
@@ -215,8 +231,11 @@ embedding gather, LayerNorm/RMSNorm, f16 matmul, KV store, attention, Qwen3 q/k-
   context. Dispatches are separated with `glMemoryBarrier(GL_ALL_BARRIER_BITS)`, because Mali
   drivers don't reliably honour the narrower storage barrier between back-to-back dispatches.
 
-A whole forward pass is recorded as one command stream, submitted once per token; only the logits
-are read back. Weights are packed f16 and the KV cache is f16. Attention walks the cache in tiles
+A forward pass is submitted one layer at a time with at most one layer in flight, and completion is
+polled rather than waited for inside the driver, so the UI's frames can reach the GPU between
+layers. Vulkan asks for a low-priority queue, EGL for a low-priority context where available. Only
+the logits are read back. Weights are f16 or FP8/FP4 blocks (`matmul_q8` / `matmul_q4`) and the
+KV cache is f16. Attention walks the cache in tiles
 of 1024 keys with an online softmax, so shared memory doesn't limit the context. Large embedding
 tables (Qwen3: 152K × 1024) are split across buffers to stay within storage-buffer and dispatch
 limits.
@@ -300,6 +319,10 @@ adb shell /data/local/tmp/neko/nekochat_cli /data/local/tmp/neko/qwen3 --backend
 `reference.json` holds tokenizer ids and greedy continuations produced with `transformers`
 (float32).
 
+Quantization tools: `--weights fp16|fp8|fp4` picks the precision; `--kl text.txt -n 160` reports
+perplexity, KL divergence and top-1 agreement against an FP16 CPU reference; `--check-quant`
+compares the CPU FP8/FP4 kernels with a dequantized reference; `--bench` times decode-shaped matmuls.
+
 ## Measured performance
 
 Samsung Galaxy M31 (Exynos 9611: 4× A73 + 4× A53, Mali-G72 MP3), f16 weights, greedy decode:
@@ -317,16 +340,31 @@ Samsung Galaxy M31 (Exynos 9611: 4× A73 + 4× A53, Mali-G72 MP3), f16 weights, 
 template ("What is the capital of France?" → "The capital of France is **Paris**."). Decode is
 memory-bandwidth bound; on this SoC the big CPU cores beat the small Mali GPU.
 
+Weight precision, Qwen3-0.6B on the same phone (CPU; quality over 160 tokens vs FP16):
+
+| Precision | Weights | CPU decode | Perplexity | KL vs FP16 | Top-1 agreement |
+|-----------|---------|-----------|------------|------------|-----------------|
+| FP16 | 1137 MB | 6.7 tok/s | 16.37 | 0 | 100% |
+| FP8 | 604 MB | 6.9 tok/s | 16.47 | 0.011 | 93% |
+| FP4 | 320 MB | 11.5 tok/s | 20.75 | 0.25 | 76% |
+
+The A73 cores lack FP16 arithmetic and dot-product instructions, so FP8 is compute-bound here
+(same speed, half the memory); cores with ARMv8.2 dotprod run FP4 through SDOT. On the Mali-G72
+the quantized GPU kernels are ALU-bound too (Vulkan/GL 4.0–4.8 tok/s for every precision).
+
 ## Known limitations
 
 - Qwen3 thinking mode is always off (replies start after an empty `<think></think>`).
 - The Qwen tokenizer's NFC normalization isn't applied (typed text is almost always NFC already).
 - Downloads need network access for NekoChat. Some ROMs switch it off for new apps; NekoChat
   detects this and links to *App info → Mobile data & Wi-Fi → Allow network access*.
+- On Mali GPUs the UI still stutters while a GPU backend generates (the compute work delays the
+  UI's frames even one layer at a time). The CPU backend keeps the UI smooth.
+- Quantization happens on every load (a few seconds); quantized weights aren't cached yet.
 
 ## Roadmap
 
-- Quantized weights (int8 / int4) for larger models
+- Cache quantized weights on disk for instant loads
 - Optional thinking mode for Qwen3
 - Auto mode that benchmarks backends and picks the fastest
 - More architectures behind the same `Model` interface
@@ -343,6 +381,15 @@ About page.
 ## Changelog
 
 Full history: [`changelog.txt`](changelog.txt).
+
+### 0.1.2 (2026-09-15)
+
+- New: **weight precision** FP16 / FP8 / FP4 (quantized at load time; FP8 checkpoints supported),
+  with CPU and GPU kernels. Qwen3-0.6B: FP8 halves memory at near-FP16 quality; FP4 is 1.7× faster on CPU.
+- New: **memory indicator** in Settings and the chat header.
+- New: **themes page** with NekoChat Rose (default) and NekoChat Ocean.
+- Improved: UI / model separation: inference at nice 4, correct big-core detection, two cores
+  always free, layer-by-layer GPU submission. CPU generation no longer slows the UI or keyboard.
 
 ### 0.1.1 (2026-09-15)
 

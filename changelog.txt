@@ -1,6 +1,53 @@
 NekoChat changelog
 ==================
 
+0.1.2 (2026-09-15)
+------------------
+
+Quantization
+- Weight precision in Settings: FP16, FP8 (OCP E4M3) or FP4 (OCP E2M1). FP8/FP4 group each row
+  into blocks of 32 weights with one f16 scale; weights are quantized while the model loads
+  (any FP16/BF16/FP32 checkpoint). Changing the precision reloads the model.
+- FP4 block scales are fitted by least squares (starting from max/6), not just max/6.
+- FP8 checkpoints (F8_E4M3 with weight_scale_inv block scales, e.g. Qwen/Qwen3-1.7B-FP8) load.
+- CPU kernels: FP8 decodes codes to f16 with byte shuffles; FP4 runs in integers (activations
+  quantized per block to int8, SDOT on cores with ARMv8.2 dotprod, SMULL/SADALP otherwise).
+- GPU kernels (Vulkan and OpenGL ES): matmul_q8 / matmul_q4 and quantized embedding gather,
+  covered by the GPU self-test.
+- Qwen3-0.6B on Galaxy M31 (CPU), 160 tokens vs FP16:
+    FP16 1137 MB, 6.7 tok/s, perplexity 16.37
+    FP8   604 MB, 6.9 tok/s, perplexity 16.47, KL 0.011, top-1 agreement 93%
+    FP4   320 MB, 11.5 tok/s, perplexity 20.75, KL 0.25, top-1 agreement 76%
+  On the Mali-G72 the GPU kernels are ALU-bound, so FP8/FP4 save memory but not time there.
+
+Memory indicator
+- Settings shows the model's memory: total, weights (with precision), chat memory (KV cache,
+  used of capacity on CPU / reserved on GPU), working buffers and the whole app's RAM.
+- The chat header shows backend, precision, speed and memory. Polled once a second without
+  touching the inference thread.
+
+UI / model separation
+- The inference thread and native workers run at nice 4 (below the UI, the RenderThread and the
+  keyboard, still in the foreground cgroup).
+- Big cores are detected with the scheduler's cpu_capacity (Snapdragon 695's 1.8 GHz A55s were
+  counted as big cores), and at least two cores are always left free.
+- GPU work is submitted one layer at a time with at most one layer in flight, polled instead of
+  blocking in the driver; Vulkan asks for a low-priority queue, EGL for a low-priority context
+  where supported.
+- Measured on Galaxy M31 while typing during generation: CPU backend frames stay at the idle
+  baseline (~22 ms at the 90th percentile). The Mali GPU backends still delay UI frames (median
+  ~250 ms on Vulkan); the throttle costs Vulkan ~15% decode speed (5.1 -> 4.4 tok/s).
+
+Themes
+- New Theme page (Settings -> Appearance): NekoChat Rose (default, One Dark + pastel pink) and
+  NekoChat Ocean (Solarized Dark base, light and dark pastel blues). Each option previews its own
+  colours; the choice is stored in Room and applied instantly.
+
+Internal
+- nekochat_cli: --weights, --kl (perplexity / KL / top-1 against an FP16 CPU reference),
+  --check-quant, --bench.
+- Version 0.1.2 (versionCode 3).
+
 0.1.1 (2026-09-15)
 ------------------
 

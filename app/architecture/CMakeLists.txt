@@ -14,7 +14,7 @@ set(GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
 #   Vulkan  -> compiled to SPIR-V with the NDK's glslc at configure time
 #   GLES    -> embedded as source text and compiled by the driver at runtime
 # Order must match neko::gpu::Kernel.
-set(NEKO_KERNELS embed layernorm matmul kv_store attention rope silu_mul)
+set(NEKO_KERNELS embed layernorm matmul kv_store attention rope silu_mul matmul_q8 matmul_q4)
 set(SHADER_DIR ${SHARED_DIR}/gpu/shaders)
 
 if(CMAKE_HOST_WIN32)
@@ -71,6 +71,7 @@ configure_file(${GEN_DIR}/shaders_gen.h.tmp ${GEN_DIR}/shaders_gen.h COPYONLY)
 add_library(neko_core STATIC
     ${SHARED_DIR}/json.cpp
     ${SHARED_DIR}/tensor_store.cpp
+    ${SHARED_DIR}/quant.cpp
     ${SHARED_DIR}/tokenizer.cpp
     ${SHARED_DIR}/thread_pool.cpp
     ${SHARED_DIR}/cpu_ops.cpp

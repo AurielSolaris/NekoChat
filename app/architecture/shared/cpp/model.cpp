@@ -17,6 +17,74 @@ std::string Model::deviceName() const {
     return "NEON x" + std::to_string(pool_->size());
 }
 
+std::string Model::weightsLabel() const {
+    std::string s = weightFormatName(weights_);
+    if (weights_ != WeightFormat::F16 && (used_ & (1u << int(WeightFormat::F16)))) s += " + FP16";
+    return s;
+}
+
+MemoryStats Model::memory(int cachedTokens) const {
+    MemoryStats m;
+    m.weights = weightBytes_;
+    m.workspace = workBytes_;
+    m.kvUsed = size_t(cachedTokens) * kvBytesPerToken_;
+    m.kvCapacity = size_t(shape_.context) * kvBytesPerToken_;
+    m.kvResident = kvPreallocated_ ? m.kvCapacity : m.kvUsed;
+    return m;
+}
+
+QMatrix Model::matrix(TensorStore& ts, std::initializer_list<std::string> names) {
+    QMatrix out;
+    for (auto& n : names) {
+        RowSource src = ts.rows(n);
+        WeightFormat f = formatFor(src.cols, weights_);
+        noteFormat(f);
+        QMatrix m = quantizeMatrix(f, src.rows, src.cols, src.read, pool_.get());
+        if (out.empty()) out = std::move(m);
+        else out.appendRows(m);
+    }
+    return out;
+}
+
+QMatrix Model::matrix(const std::vector<uint16_t>& f16, int rows, int cols) {
+    WeightFormat f = formatFor(cols, weights_);
+    noteFormat(f);
+    const uint16_t* p = f16.data();
+    return quantizeMatrix(f, rows, cols, [p, cols](int r, float* out) {
+        const uint16_t* src = p + size_t(r) * size_t(cols);
+        for (int c = 0; c < cols; c++) out[c] = f16_to_f32(src[c]);
+    }, pool_.get());
+}
+
+gpu::Buffer* Model::weightBuffer(size_t bytes, const void* data) {
+    weightBytes_ += bytes;
+    return gpu_->create(bytes, data);
+}
+
+GpuMatrix Model::weightBuffer(const QMatrix& m) {
+    return {weightBuffer(m.bytes(), m.data.data()), m.format, m.rowBytes};
+}
+
+gpu::Buffer* Model::kvBuffer(size_t bytes) {
+    kvPreallocated_ = true;
+    return gpu_->create(bytes);
+}
+
+gpu::Buffer* Model::workBuffer(size_t bytes, bool readback) {
+    workBytes_ += bytes;
+    return gpu_->create(bytes, nullptr, readback);
+}
+
+void Model::gpuMatmul(const GpuMatrix& w, int rows, gpu::Buffer* x, gpu::Buffer* bias, gpu::Buffer* y, int K,
+                      int yStride, int T, int flags, int xRow0, int nOffset) {
+    const gpu::Kernel k = w.format == WeightFormat::FP8   ? gpu::Kernel::MatmulQ8
+                          : w.format == WeightFormat::FP4 ? gpu::Kernel::MatmulQ4
+                                                          : gpu::Kernel::Matmul;
+    gpu::Buffer* binds[4] = {x, w.buf, bias, y};
+    const int32_t params[8] = {K, yStride, T, flags, xRow0, nOffset, 0, 0};
+    gpu_->dispatch(k, binds, params, uint32_t(rows), uint32_t((T + 3) / 4));
+}
+
 void Model::openCheckpoint(const std::string& dir, TensorStore& ts) {
     std::vector<std::string> st, pt;
     DIR* d = opendir(dir.c_str());
@@ -78,6 +146,8 @@ void Model::startGpu(BackendPref pref, const ProgressFn& progress,
             NEKO_LOGW("%s load failed: %s", label, e.what());
             unload();
             gpu_.reset();
+            weightBytes_ = workBytes_ = 0;
+            kvPreallocated_ = false;
         }
     }
 }
@@ -93,10 +163,10 @@ std::string readModelType(const std::string& dir) {
     return "unknown";
 }
 
-std::unique_ptr<Model> loadModel(const std::string& type, const std::string& dir, BackendPref pref, int threads,
+std::unique_ptr<Model> loadModel(const std::string& type, const std::string& dir, const LoadOptions& opt,
                                  const ProgressFn& progress) {
-    if (type == "gpt2") return std::make_unique<Gpt2Model>(dir, pref, threads, progress);
-    if (type == "qwen3") return std::make_unique<Qwen3Model>(dir, pref, threads, progress);
+    if (type == "gpt2") return std::make_unique<Gpt2Model>(dir, opt, progress);
+    if (type == "qwen3") return std::make_unique<Qwen3Model>(dir, opt, progress);
     fail("unsupported architecture '" + type + "' (NekoChat runs GPT-2 and Qwen3 models)");
 }
 

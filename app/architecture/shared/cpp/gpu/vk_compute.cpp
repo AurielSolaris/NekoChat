@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 
 #include <dlfcn.h>
+#include <unistd.h>
 
 #include <vector>
 
@@ -20,6 +21,7 @@ namespace {
     X(vkGetPhysicalDeviceProperties)             \
     X(vkGetPhysicalDeviceQueueFamilyProperties)  \
     X(vkGetPhysicalDeviceMemoryProperties)       \
+    X(vkEnumerateDeviceExtensionProperties)      \
     X(vkCreateDevice)                            \
     X(vkGetDeviceProcAddr)
 
@@ -64,6 +66,7 @@ namespace {
     X(vkCreateFence)                   \
     X(vkDestroyFence)                  \
     X(vkWaitForFences)                 \
+    X(vkGetFenceStatus)                \
     X(vkResetFences)                   \
     X(vkDeviceWaitIdle)
 
@@ -134,12 +137,10 @@ public:
         std::memcpy(dst, b->mapped + offset, bytes);
     }
 
+    // Descriptor sets live until the next begin(): every submission of the previous step has completed by then.
     void begin() override {
         check(vkResetDescriptorPool(device_, descPool_, 0), "vkResetDescriptorPool");
-        check(vkResetCommandBuffer(cmd_, 0), "vkResetCommandBuffer");
-        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        check(vkBeginCommandBuffer(cmd_, &bi), "vkBeginCommandBuffer");
+        startSlot();
     }
 
     void dispatch(Kernel k, Buffer* const bindings[4], const int32_t params[8], uint32_t gx, uint32_t gy) override {
@@ -162,33 +163,87 @@ public:
             writes[i].pBufferInfo = &infos[i];
         }
         vkUpdateDescriptorSets(device_, 4, writes, 0, nullptr);
-        vkCmdBindPipeline(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_[int(k)]);
-        vkCmdBindDescriptorSets(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &set, 0, nullptr);
-        vkCmdPushConstants(cmd_, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, 32, params);
-        vkCmdDispatch(cmd_, gx, gy, 1);
+        VkCommandBuffer cmd = slots_[cur_].cmd;
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_[int(k)]);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &set, 0, nullptr);
+        vkCmdPushConstants(cmd, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, 32, params);
+        vkCmdDispatch(cmd, gx, gy, 1);
+        // Barriers order against everything earlier in submission order, so they also hold across flush().
         VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
         mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb,
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb,
                              0, nullptr, 0, nullptr);
+    }
+
+    // Submits the work so far and waits for it. Mali does not interleave queued work from different contexts,
+    // so with anything of ours still queued the UI's and the keyboard's frames wait for the whole token; with
+    // one layer in flight they get the GPU between layers.
+    void flush() override {
+        submitSlot();
+        waitSlot(slots_[(cur_ + slots_.size() - 1) % slots_.size()]);
+        startSlot();
     }
 
     void submitAndWait() override {
         VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
         mb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-        vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &mb, 0,
-                             nullptr, 0, nullptr);
-        check(vkEndCommandBuffer(cmd_), "vkEndCommandBuffer");
-        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-        si.commandBufferCount = 1;
-        si.pCommandBuffers = &cmd_;
-        check(vkQueueSubmit(queue_, 1, &si, fence_), "vkQueueSubmit");
-        check(vkWaitForFences(device_, 1, &fence_, VK_TRUE, UINT64_MAX), "vkWaitForFences");
-        check(vkResetFences(device_, 1, &fence_), "vkResetFences");
+        vkCmdPipelineBarrier(slots_[cur_].cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1,
+                             &mb, 0, nullptr, 0, nullptr);
+        submitSlot();
+        for (Slot& s : slots_) waitSlot(s);
     }
 
 private:
+    // One step is recorded into a ring of command buffers; flush() submits the current one and moves on.
+    struct Slot {
+        VkCommandBuffer cmd = VK_NULL_HANDLE;
+        VkFence fence = VK_NULL_HANDLE;
+        bool pending = false;
+    };
+
+    // Polls instead of blocking in vkWaitForFences: the UI renders through the same driver in this process,
+    // and a thread parked inside the driver's wait can hold up the RenderThread's frames.
+    void waitSlot(Slot& s) {
+        if (!s.pending) return;
+        VkResult r;
+        while ((r = vkGetFenceStatus(device_, s.fence)) == VK_NOT_READY) usleep(200);
+        check(r, "vkGetFenceStatus");
+        check(vkResetFences(device_, 1, &s.fence), "vkResetFences");
+        s.pending = false;
+    }
+
+    void startSlot() {
+        Slot& s = slots_[cur_];
+        waitSlot(s);  // only when a step needs more submissions than the ring holds
+        check(vkResetCommandBuffer(s.cmd, 0), "vkResetCommandBuffer");
+        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        check(vkBeginCommandBuffer(s.cmd, &bi), "vkBeginCommandBuffer");
+    }
+
+    void submitSlot() {
+        Slot& s = slots_[cur_];
+        check(vkEndCommandBuffer(s.cmd), "vkEndCommandBuffer");
+        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &s.cmd;
+        check(vkQueueSubmit(queue_, 1, &si, s.fence), "vkQueueSubmit");
+        s.pending = true;
+        cur_ = (cur_ + 1) % slots_.size();
+    }
+
+    bool hasDeviceExtension(const char* name) {
+        uint32_t n = 0;
+        vkEnumerateDeviceExtensionProperties(phys_, nullptr, &n, nullptr);
+        std::vector<VkExtensionProperties> exts(n);
+        vkEnumerateDeviceExtensionProperties(phys_, nullptr, &n, exts.data());
+        for (auto& e : exts)
+            if (std::strcmp(e.extensionName, name) == 0) return true;
+        return false;
+    }
+
     void init() {
         lib_ = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
         if (!lib_) fail("libvulkan.so not available");
@@ -246,7 +301,24 @@ private:
         VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
         dci.queueCreateInfoCount = 1;
         dci.pQueueCreateInfos = &qci;
-        check(vkCreateDevice(phys_, &dci, nullptr, &device_), "vkCreateDevice");
+        // A low-priority queue (where supported) lets the UI's and the keyboard's GPU work go first.
+        VkDeviceQueueGlobalPriorityCreateInfoEXT prioInfo{VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_EXT};
+        prioInfo.globalPriority = VK_QUEUE_GLOBAL_PRIORITY_LOW_EXT;
+        const char* prioExt = VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME;
+        VkResult created = VK_ERROR_INITIALIZATION_FAILED;
+        if (hasDeviceExtension(prioExt)) {
+            qci.pNext = &prioInfo;
+            dci.enabledExtensionCount = 1;
+            dci.ppEnabledExtensionNames = &prioExt;
+            created = vkCreateDevice(phys_, &dci, nullptr, &device_);
+            lowPriority_ = created == VK_SUCCESS;
+        }
+        if (created != VK_SUCCESS) {
+            qci.pNext = nullptr;
+            dci.enabledExtensionCount = 0;
+            dci.ppEnabledExtensionNames = nullptr;
+            check(vkCreateDevice(phys_, &dci, nullptr, &device_), "vkCreateDevice");
+        }
 #define X(fn) fn = reinterpret_cast<PFN_##fn>(vkGetDeviceProcAddr(device_, #fn)); if (!fn) fail("missing " #fn);
         NEKO_VK_DEVICE_FNS(X)
 #undef X
@@ -295,16 +367,20 @@ private:
         cpci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
         cpci.queueFamilyIndex = queueFamily_;
         check(vkCreateCommandPool(device_, &cpci, nullptr, &cmdPool_), "vkCreateCommandPool");
-        VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-        cai.commandPool = cmdPool_;
-        cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        cai.commandBufferCount = 1;
-        check(vkAllocateCommandBuffers(device_, &cai, &cmd_), "vkAllocateCommandBuffers");
-        VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-        check(vkCreateFence(device_, &fci, nullptr, &fence_), "vkCreateFence");
+        slots_.resize(kSlots);
+        for (Slot& s : slots_) {
+            VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+            cai.commandPool = cmdPool_;
+            cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            cai.commandBufferCount = 1;
+            check(vkAllocateCommandBuffers(device_, &cai, &s.cmd), "vkAllocateCommandBuffers");
+            VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+            check(vkCreateFence(device_, &fci, nullptr, &s.fence), "vkCreateFence");
+        }
 
         dummy_ = create(16, nullptr, false);
-        NEKO_LOGI("Vulkan backend on %s (max storage buffer %zu MB)", deviceName_.c_str(), maxBuffer_ >> 20);
+        NEKO_LOGI("Vulkan backend on %s (max storage buffer %zu MB, %s priority queue)", deviceName_.c_str(),
+                  maxBuffer_ >> 20, lowPriority_ ? "low" : "default");
     }
 
     uint32_t pickMemoryType(uint32_t allowed, bool readback) const {
@@ -332,7 +408,8 @@ private:
                 vkFreeMemory(device_, b->memory, nullptr);
             }
             buffers_.clear();
-            if (fence_) vkDestroyFence(device_, fence_, nullptr);
+            for (Slot& s : slots_)
+                if (s.fence) vkDestroyFence(device_, s.fence, nullptr);
             if (cmdPool_) vkDestroyCommandPool(device_, cmdPool_, nullptr);
             if (descPool_) vkDestroyDescriptorPool(device_, descPool_, nullptr);
             for (auto p : pipelines_)
@@ -346,6 +423,7 @@ private:
     }
 
     static constexpr uint32_t kMaxSets = 1024;
+    static constexpr size_t kSlots = 32;
 
     void* lib_ = nullptr;
     PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr = nullptr;
@@ -364,8 +442,9 @@ private:
     VkPipeline pipelines_[int(Kernel::Count)] = {};
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
     VkCommandPool cmdPool_ = VK_NULL_HANDLE;
-    VkCommandBuffer cmd_ = VK_NULL_HANDLE;
-    VkFence fence_ = VK_NULL_HANDLE;
+    std::vector<Slot> slots_;
+    size_t cur_ = 0;
+    bool lowPriority_ = false;
     std::vector<std::unique_ptr<VkBuf>> buffers_;
     Buffer* dummy_ = nullptr;
     std::string deviceName_;

@@ -26,18 +26,25 @@ import com.nekochat.engine.ComputeBackend
 import com.nekochat.engine.EngineInfo
 import com.nekochat.engine.InferenceEngine
 import com.nekochat.engine.LocalModel
+import com.nekochat.engine.MemoryUsage
 import com.nekochat.engine.ModelRepository
 import com.nekochat.engine.StopFilter
 import com.nekochat.engine.StreamBuffer
+import com.nekochat.engine.WeightPrecision
 import com.nekochat.gpt2.Gpt2ChatFormat
 import com.nekochat.qwen3.Qwen3ChatFormat
+import com.nekochat.ui.theme.Neko
+import com.nekochat.ui.theme.NekoTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -47,7 +54,7 @@ import java.io.File
  * Boot shows nothing while Room loads (a few ms). Setup appears only until the first model is
  * chosen; afterwards the app opens on Chats and everything is changed from Settings.
  */
-enum class Screen { Boot, Setup, Chats, Chat, ChatSettings, Settings, About, AddModels }
+enum class Screen { Boot, Setup, Chats, Chat, ChatSettings, Settings, About, AddModels, Themes }
 
 sealed interface LoadState {
     data object Idle : LoadState
@@ -88,9 +95,20 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var downloadEngine by mutableStateOf(DownloadEngine.Aria2Multi)
         private set
+    var precision by mutableStateOf(WeightPrecision.FP16)
+        private set
+    val theme: NekoTheme get() = Neko.theme
 
     private val _load = MutableStateFlow<LoadState>(LoadState.Idle)
     val load: StateFlow<LoadState> = _load.asStateFlow()
+
+    /** Polled once a second while a screen shows it; never touches the (possibly busy) inference thread. */
+    val memory: StateFlow<MemoryUsage?> = flow {
+        while (true) {
+            emit(engine.memory())
+            delay(1000)
+        }
+    }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(1000), null)
 
     val chats = mutableStateListOf<Conversation>()
     var activeId by mutableStateOf<Long?>(null)
@@ -114,6 +132,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 LegacyImport.run(app, db)
                 prefs.load()
             }
+            Neko.theme = NekoTheme.entries.firstOrNull { it.name == prefs[PrefKeys.THEME] } ?: NekoTheme.Rose
+            precision = WeightPrecision.entries.firstOrNull { it.name == prefs[PrefKeys.WEIGHTS] } ?: WeightPrecision.FP16
             username = prefs[PrefKeys.USERNAME].orEmpty()
             selectedModelPath = prefs[PrefKeys.MODEL]
             backend = ComputeBackend.entries.firstOrNull { it.name == prefs[PrefKeys.BACKEND] } ?: ComputeBackend.Auto
@@ -145,7 +165,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         screen = when (screen) {
             Screen.ChatSettings -> Screen.Chat
             Screen.Chat, Screen.Settings -> Screen.Chats
-            Screen.About -> Screen.Settings
+            Screen.About, Screen.Themes -> Screen.Settings
             Screen.AddModels -> addModelsReturn
             Screen.Chats, Screen.Setup, Screen.Boot -> screen
         }
@@ -160,6 +180,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun openAbout() {
         screen = Screen.About
+    }
+
+    fun openThemes() {
+        screen = Screen.Themes
     }
 
     fun openAddModels() {
@@ -211,6 +235,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             prefs[PrefKeys.BACKEND] = b.name
             models.value?.firstOrNull { it.id == selectedModelPath && it.supported }?.let(::ensureLoaded)
         }
+    }
+
+    /** Reloads the current model in the new precision. */
+    fun selectPrecision(p: WeightPrecision) {
+        precision = p
+        prefs[PrefKeys.WEIGHTS] = p.name
+        if (setupDone) models.value?.firstOrNull { it.id == selectedModelPath && it.supported }?.let(::ensureLoaded)
+    }
+
+    fun selectTheme(t: NekoTheme) {
+        Neko.theme = t
+        prefs[PrefKeys.THEME] = t.name
     }
 
     fun selectDnsMode(mode: DnsMode) {
@@ -310,7 +346,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun ensureLoaded(model: LocalModel) {
-        val key = "${model.id}|${backend.id}"
+        val key = "${model.id}|${backend.id}|${precision.id}"
         if (key == loadedKey && _load.value !is LoadState.Failed) return
         loadedKey = key
         if (generating) engine.cancel()
@@ -320,7 +356,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             _load.value = try {
                 // Weights are copied into engine-owned buffers, so the folder access only lives for the load.
                 val info = withContext(Dispatchers.IO) { repository.open(model) }.use { access ->
-                    engine.load(access.dir, backend) { f, s -> _load.value = LoadState.Loading(f, s) }
+                    engine.load(access.dir, backend, precision) { f, s -> _load.value = LoadState.Loading(f, s) }
                 }
                 LoadState.Ready(info, model.name)
             } catch (e: Throwable) {

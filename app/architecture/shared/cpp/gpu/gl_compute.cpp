@@ -4,6 +4,8 @@
 #include <EGL/eglext.h>
 #include <GLES3/gl31.h>
 
+#include <unistd.h>
+
 #include <cstdlib>
 #include <vector>
 
@@ -72,8 +74,18 @@ public:
         if (syncEach_) glFinish();  // debugging aid: NEKO_GL_SYNC=1
     }
 
+    // Runs the work so far and waits for it (see VulkanBackend::flush): with one layer in flight, frames from
+    // the UI and the keyboard get the GPU between layers instead of after the whole token.
+    void flush() override {
+        pending_ = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        glFlush();
+        dropPending(true);
+    }
+
     void submitAndWait() override {
-        glFinish();
+        pending_ = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        glFlush();
+        dropPending(true);
         GLenum err = glGetError();
         if (err != GL_NO_ERROR) fail("GLES error " + std::to_string(err));
     }
@@ -84,6 +96,23 @@ private:
         GLint pa = -1, pb = -1;
     };
 
+    // Polls instead of blocking in glClientWaitSync/glFinish: the UI renders through the same driver in this
+    // process, and a thread parked inside the driver's wait can hold up the RenderThread's frames.
+    void dropPending(bool wait) {
+        if (!pending_) return;
+        if (wait) {
+            for (;;) {
+                GLenum r = glClientWaitSync(pending_, 0, 0);
+                if (r == GL_ALREADY_SIGNALED || r == GL_CONDITION_SATISFIED || r == GL_WAIT_FAILED) break;
+                usleep(200);
+            }
+        }
+        glDeleteSync(pending_);
+        pending_ = nullptr;
+    }
+
+    GLsync pending_ = nullptr;
+
     void init() {
         display_ = eglGetDisplay(EGL_DEFAULT_DISPLAY);
         if (display_ == EGL_NO_DISPLAY || !eglInitialize(display_, nullptr, nullptr)) fail("EGL init failed");
@@ -93,7 +122,12 @@ private:
         EGLConfig cfg;
         EGLint n = 0;
         if (!eglChooseConfig(display_, cfgAttr, &cfg, 1, &n) || n == 0) fail("EGL: no ES3 config");
-        const EGLint ctxAttr[] = {EGL_CONTEXT_MAJOR_VERSION_KHR, 3, EGL_CONTEXT_MINOR_VERSION_KHR, 1, EGL_NONE};
+        // Low context priority (where the driver offers it) lets the UI's and the keyboard's GPU work go first.
+        const char* ext = eglQueryString(display_, EGL_EXTENSIONS);
+        const bool lowPriority = ext && std::strstr(ext, "EGL_IMG_context_priority");
+        const EGLint ctxAttr[] = {EGL_CONTEXT_MAJOR_VERSION_KHR, 3, EGL_CONTEXT_MINOR_VERSION_KHR, 1,
+                                  lowPriority ? EGL_CONTEXT_PRIORITY_LEVEL_IMG : EGL_NONE, EGL_CONTEXT_PRIORITY_LOW_IMG,
+                                  EGL_NONE};
         context_ = eglCreateContext(display_, cfg, EGL_NO_CONTEXT, ctxAttr);
         if (context_ == EGL_NO_CONTEXT) fail("EGL: cannot create ES 3.1 context");
         const EGLint pbAttr[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};

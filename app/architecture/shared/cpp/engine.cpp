@@ -39,10 +39,10 @@ std::string jsonEscape(const std::string& s) {
 
 }  // namespace
 
-Engine::Engine(const std::string& dir, BackendPref pref, int threads, const ProgressFn& progress) {
+Engine::Engine(const std::string& dir, const LoadOptions& opt, const ProgressFn& progress) {
     std::string type = readModelType(dir);
     tokenizer_.load(dir, type == "qwen3" ? PreTokenizer::Qwen2 : PreTokenizer::Gpt2);
-    model_ = loadModel(type, dir, pref, threads, progress);
+    model_ = loadModel(type, dir, opt, progress);
     const int V = model_->shape().vocab;
     if (tokenizer_.vocabSize() > V + 1) NEKO_LOGW("tokenizer vocab (%d) larger than model vocab (%d)", tokenizer_.vocabSize(), V);
     // Base models end with <|endoftext|>; chat models end a turn with <|im_end|>.
@@ -60,7 +60,9 @@ std::string Engine::infoJson() const {
     return std::string("{") + "\"architecture\":\"" + model_->architecture() + "\",\"backend\":\"" +
            jsonEscape(model_->backendName()) + "\",\"device\":\"" + jsonEscape(model_->deviceName()) +
            "\",\"note\":\"" + jsonEscape(model_->backendNote()) + "\",\"format\":\"" + model_->checkpointFormat() +
-           "\",\"params\":" + std::to_string(model_->parameterCount()) + ",\"layers\":" + std::to_string(s.layers) +
+           "\",\"weights\":\"" + model_->weightsLabel() + "\",\"weightBytes\":" +
+           std::to_string(model_->memory(0).weights) +
+           ",\"params\":" + std::to_string(model_->parameterCount()) + ",\"layers\":" + std::to_string(s.layers) +
            ",\"embd\":" + std::to_string(s.embd) + ",\"heads\":" + std::to_string(s.heads) +
            ",\"kvHeads\":" + std::to_string(s.kvHeads) + ",\"context\":" + std::to_string(s.context) +
            ",\"vocab\":" + std::to_string(s.vocab) + "}";
@@ -82,7 +84,7 @@ GenerateStats Engine::generate(const std::vector<int>& promptIn, int maxNew, con
     size_t common = 0;
     while (common < cached_.size() && common < prompt.size() && cached_[common] == prompt[common]) common++;
     if (common == prompt.size()) common--;
-    cached_.resize(common);
+    setCached(common);
     st.reusedTokens = int(common);
 
     double t0 = nowMs();
@@ -90,6 +92,7 @@ GenerateStats Engine::generate(const std::vector<int>& promptIn, int maxNew, con
         int T = int(std::min<size_t>(Model::kMaxBatch, prompt.size() - i));
         model_->forward(prompt.data() + i, T, int(cached_.size()), logits_.data());
         cached_.insert(cached_.end(), prompt.begin() + long(i), prompt.begin() + long(i) + T);
+        cachedCount_.store(int(cached_.size()), std::memory_order_relaxed);
         i += size_t(T);
         if (cancel_.load()) {
             st.stopReason = 2;
@@ -121,6 +124,7 @@ GenerateStats Engine::generate(const std::vector<int>& promptIn, int maxNew, con
         if (n + 1 == maxNew) break;  // no need to run the model for a token we will not sample
         model_->forward(&next, 1, int(cached_.size()), logits_.data());
         cached_.push_back(next);
+        cachedCount_.store(int(cached_.size()), std::memory_order_relaxed);
     }
     if (!pending.empty()) onText(pending);
     st.decodeMs = nowMs() - t1;

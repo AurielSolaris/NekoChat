@@ -24,6 +24,8 @@ public:
 
     static std::vector<int> performanceCores();
 
+    static constexpr int kWorkerNice = 4;
+
 private:
     void workerLoop(int index);
 

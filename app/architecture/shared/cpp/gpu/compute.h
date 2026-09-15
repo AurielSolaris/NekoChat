@@ -11,7 +11,7 @@
 namespace neko::gpu {
 
 // Order must match NEKO_KERNELS in architecture/CMakeLists.txt.
-enum class Kernel : int { Embed = 0, LayerNorm, Matmul, KvStore, Attention, Rope, SiluMul, Count };
+enum class Kernel : int { Embed = 0, LayerNorm, Matmul, KvStore, Attention, Rope, SiluMul, MatmulQ8, MatmulQ4, Count };
 
 struct Buffer {
     size_t size = 0;
@@ -35,6 +35,9 @@ public:
     // Recording: begin(), any number of dispatch() (each one is ordered after the previous), submitAndWait().
     virtual void begin() = 0;
     virtual void dispatch(Kernel k, Buffer* const bindings[4], const int32_t params[8], uint32_t gx, uint32_t gy) = 0;
+    // Sends the dispatches recorded so far to the GPU without waiting; recording continues. The GPU is shared
+    // with the UI and the keyboard, and one long submission per token would stall their frames until it ends.
+    virtual void flush() = 0;
     virtual void submitAndWait() = 0;
 };
 

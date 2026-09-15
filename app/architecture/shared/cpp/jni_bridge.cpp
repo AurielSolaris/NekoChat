@@ -38,7 +38,7 @@ Engine* engine(jlong h) { return reinterpret_cast<Engine*>(h); }
 extern "C" {
 
 JNIEXPORT jlong JNICALL Java_com_nekochat_engine_NativeBridge_nativeLoad(JNIEnv* env, jclass, jstring dir, jint backend,
-                                                                         jint threads, jobject progress) {
+                                                                         jint threads, jint weights, jobject progress) {
     jmethodID onProgress = nullptr;
     if (progress) {
         jclass cls = env->GetObjectClass(progress);
@@ -51,7 +51,11 @@ JNIEXPORT jlong JNICALL Java_com_nekochat_engine_NativeBridge_nativeLoad(JNIEnv*
         env->DeleteLocalRef(s);
     };
     try {
-        auto* e = new Engine(jstr(env, dir), static_cast<neko::BackendPref>(backend), threads, report);
+        neko::LoadOptions opt;
+        opt.backend = static_cast<neko::BackendPref>(backend);
+        opt.threads = threads;
+        opt.weights = static_cast<neko::WeightFormat>(weights);
+        auto* e = new Engine(jstr(env, dir), opt, report);
         return reinterpret_cast<jlong>(e);
     } catch (const std::exception& ex) {
         if (!env->ExceptionCheck()) throwJava(env, ex.what());
@@ -65,6 +69,15 @@ JNIEXPORT void JNICALL Java_com_nekochat_engine_NativeBridge_nativeRelease(JNIEn
 
 JNIEXPORT jstring JNICALL Java_com_nekochat_engine_NativeBridge_nativeInfo(JNIEnv* env, jclass, jlong h) {
     return env->NewStringUTF(engine(h)->infoJson().c_str());
+}
+
+// Returns [weights, kvUsed, kvCapacity, kvResident, workspace] in bytes. Callable from any thread.
+JNIEXPORT jlongArray JNICALL Java_com_nekochat_engine_NativeBridge_nativeMemory(JNIEnv* env, jclass, jlong h) {
+    neko::MemoryStats m = engine(h)->memory();
+    jlong v[5] = {jlong(m.weights), jlong(m.kvUsed), jlong(m.kvCapacity), jlong(m.kvResident), jlong(m.workspace)};
+    jlongArray out = env->NewLongArray(5);
+    env->SetLongArrayRegion(out, 0, 5, v);
+    return out;
 }
 
 JNIEXPORT jint JNICALL Java_com_nekochat_engine_NativeBridge_nativeContextLength(JNIEnv*, jclass, jlong h) {

@@ -130,7 +130,7 @@ private fun Setting(name: String, value: String, hint: String?, control: @Compos
     Column(Modifier.padding(vertical = 4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(name, color = Neko.Text, fontSize = 15.sp, modifier = Modifier.weight(1f))
-            Text(value, color = Neko.Pink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace)
+            Text(value, color = Neko.Accent, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace)
         }
         if (hint != null) Text(hint, color = Neko.TextMuted, fontSize = 12.sp)
         control()
@@ -145,8 +145,8 @@ private fun NekoSlider(value: Float, range: ClosedFloatingPointRange<Float>, ste
         valueRange = range,
         steps = steps,
         colors = SliderDefaults.colors(
-            thumbColor = Neko.Pink,
-            activeTrackColor = Neko.Pink,
+            thumbColor = Neko.Accent,
+            activeTrackColor = Neko.Accent,
             inactiveTrackColor = Neko.Border,
             activeTickColor = Color.Transparent,
             inactiveTickColor = Color.Transparent,

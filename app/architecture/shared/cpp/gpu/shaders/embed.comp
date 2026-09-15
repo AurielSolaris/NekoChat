@@ -1,6 +1,7 @@
 // x[t][c] = table[token[t] - rowBase][c] (+ wpe[pos0 + t][c]). Tokens outside [rowBase, rowBase + rows) are skipped,
 // so a table split across several buffers is gathered with one dispatch per chunk.
-// PA = (T, C, pos0, flags) flags: 1 = add the position table. PB = (rowBase, rows, -, -). Dispatch (ceil(C/64), T).
+// PA = (T, C, pos0, flags) flags: 1 = add the f16 position table, 2 = FP8 table, 4 = FP4 table (quant.h layout).
+// PB = (rowBase, rows, rowWords, -): rowWords = bytes per quantized row / 4. Dispatch (ceil(C/64), T).
 layout(local_size_x = 64) in;
 BUF(0) readonly buffer Tokens { int tokens[]; };
 BUF(1) readonly buffer Wte { uint wte[]; };
@@ -8,17 +9,37 @@ BUF(2) readonly buffer Wpe { uint wpe[]; };
 BUF(3) writeonly buffer X { float x[]; };
 
 void main() {
-    int T = PA.x, C = PA.y, pos0 = PA.z;
+    int T = PA.x, C = PA.y, pos0 = PA.z, flags = PA.w;
     int c = int(gl_GlobalInvocationID.x);
     int t = int(gl_GlobalInvocationID.y);
     if (c >= C || t >= T) return;
     int row = tokens[t] - PB.x;
     if (row < 0 || row >= PB.y) return;
-    uint e = uint(row * C + c);
-    // Copy to locals first: Mali's GLES compiler rejects readonly SSBO members as call arguments.
-    uint we = wte[e >> 1];
-    float v = halfAt(we, e);
-    if ((PA.w & 1) != 0) {
+    float v;
+    // Copy SSBO words to locals first: Mali's GLES compiler rejects readonly SSBO members as call arguments.
+    if ((flags & 6) == 0) {
+        uint e = uint(row * C + c);
+        uint we = wte[e >> 1];
+        v = halfAt(we, e);
+    } else {
+        int base = row * PB.z;
+        int b = c >> 5;
+        bool fp8 = (flags & 2) != 0;
+        uint sw = wte[base + (fp8 ? C >> 2 : C >> 3) + (b >> 1)];
+        float s = halfAt(sw, uint(b));
+        if (fp8) {
+            uint q = wte[base + (c >> 2)];
+            uint code = (q >> (8 * (c & 3))) & 0xFFu;
+            v = unpackHalf2x16(((code & 0x7Fu) << 7) | ((code & 0x80u) << 8)).x * s * 256.0;
+        } else {
+            int j = c & 31;
+            int byteIndex = b * 16 + (j & 15);
+            uint q = wte[base + (byteIndex >> 2)];
+            uint code = (q >> (8 * (byteIndex & 3) + (j >= 16 ? 4 : 0))) & 0xFu;
+            v = unpackHalf2x16(((code & 8u) << 12) | ((code & 7u) << 9)).x * s * 16384.0;
+        }
+    }
+    if ((flags & 1) != 0) {
         uint p = uint((pos0 + t) * C + c);
         uint wp = wpe[p >> 1];
         v += halfAt(wp, p);

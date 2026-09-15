@@ -28,6 +28,9 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import com.nekochat.download.DnsMode
 import com.nekochat.download.DownloadEngine
+import com.nekochat.engine.WeightPrecision
+import com.nekochat.engine.formatBytes
+import androidx.compose.ui.text.font.FontWeight
 import com.nekochat.ui.theme.Neko
 import com.nekochat.ui.theme.NekoRadius
 
@@ -75,11 +78,34 @@ fun SettingsScreen(vm: ChatViewModel) {
                     Text(status, color = Neko.TextSecondary, fontSize = 13.sp)
                     Spacer(Modifier.height(12.dp))
                 }
+                if (load is LoadState.Ready) {
+                    MemorySection(vm, (load as LoadState.Ready).info.weights)
+                    Spacer(Modifier.height(16.dp))
+                }
                 ModelsSection(vm)
             }
 
             SettingsGroup("Compute backend") {
                 BackendSection(vm)
+            }
+
+            SettingsGroup("Weight precision") {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    WeightPrecision.entries.forEach { p ->
+                        Chip(p.label, selected = vm.precision == p) { vm.selectPrecision(p) }
+                    }
+                }
+                Text(
+                    vm.precision.detail + " Changing it reloads the model.",
+                    color = Neko.TextMuted,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+
+            SettingsGroup("Appearance") {
+                NavRow("Theme", vm.theme.label, onClick = vm::openThemes)
             }
 
             SettingsGroup("Downloads") {
@@ -124,5 +150,33 @@ fun SettingsScreen(vm: ChatViewModel) {
                 NavRow("About NekoChat", "Version, license and open-source components", onClick = vm::openAbout)
             }
         }
+    }
+}
+
+/** Live memory of the loaded model: total first, then what it is made of. */
+@Composable
+private fun MemorySection(vm: ChatViewModel, weightsLabel: String) {
+    val m by vm.memory.collectAsState()
+    val usage = m ?: return
+    Column(Modifier.fillMaxWidth().innerCard().padding(14.dp)) {
+        Text("Memory in use", color = Neko.TextSecondary, fontSize = 13.sp)
+        Text(formatBytes(usage.model), color = Neko.Text, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(8.dp))
+        MemoryRow("Weights ($weightsLabel)", formatBytes(usage.weights))
+        MemoryRow(
+            "Chat memory (KV cache)",
+            if (usage.kvResident > usage.kvUsed) "${formatBytes(usage.kvResident)} reserved"
+            else "${formatBytes(usage.kvUsed)} of ${formatBytes(usage.kvCapacity)}",
+        )
+        MemoryRow("Working buffers", formatBytes(usage.workspace))
+        if (usage.appResident > 0) MemoryRow("Whole app (RAM)", formatBytes(usage.appResident))
+    }
+}
+
+@Composable
+private fun MemoryRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Text(label, color = Neko.TextMuted, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        Text(value, color = Neko.TextSecondary, fontSize = 13.sp)
     }
 }

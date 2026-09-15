@@ -102,7 +102,7 @@ private fun ModelRow(model: LocalModel, selected: Boolean, onClick: () -> Unit) 
             Icon(
                 painterResource(R.drawable.ic_model),
                 contentDescription = null,
-                tint = if (selected) Neko.Pink else Neko.TextSecondary,
+                tint = if (selected) Neko.Accent else Neko.TextSecondary,
                 modifier = Modifier.size(22.dp),
             )
         }
@@ -124,10 +124,10 @@ private fun ModelRow(model: LocalModel, selected: Boolean, onClick: () -> Unit) 
         }
         if (selected) {
             Box(
-                Modifier.size(24.dp).clip(CircleShape).background(Neko.Pink),
+                Modifier.size(24.dp).clip(CircleShape).background(Neko.Accent),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Rounded.Check, contentDescription = "Selected", tint = Neko.OnPink, modifier = Modifier.size(16.dp))
+                Icon(Icons.Rounded.Check, contentDescription = "Selected", tint = Neko.OnAccent, modifier = Modifier.size(16.dp))
             }
         }
     }
@@ -163,7 +163,7 @@ private fun FolderRow(folderName: String?, onChoose: () -> Unit) {
             Modifier.size(40.dp).glass(RoundedCornerShape(NekoRadius.Medium), level = GlassLevel.Base),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(painterResource(R.drawable.ic_folder), contentDescription = null, tint = Neko.Pink, modifier = Modifier.size(22.dp))
+            Icon(painterResource(R.drawable.ic_folder), contentDescription = null, tint = Neko.Accent, modifier = Modifier.size(22.dp))
         }
         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
             Text(folderName, color = Neko.Text, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1,

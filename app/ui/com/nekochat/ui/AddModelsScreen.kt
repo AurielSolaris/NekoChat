@@ -224,7 +224,7 @@ private fun DownloadRow(
                 LinearProgressIndicator(
                     progress = { d.progress },
                     modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
-                    color = if (d.status == DownloadStatus.Paused) Neko.TextMuted else Neko.Pink,
+                    color = if (d.status == DownloadStatus.Paused) Neko.TextMuted else Neko.Accent,
                     trackColor = Neko.Border,
                     drawStopIndicator = {},
                 )

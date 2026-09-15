@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -10,7 +11,7 @@
 
 namespace neko {
 
-enum class DType { F32, F16, BF16, F64, I64, I32, I8, U8, Bool };
+enum class DType { F32, F16, BF16, F64, I64, I32, I8, U8, Bool, F8E4M3 };
 
 size_t dtypeSize(DType t);
 const char* dtypeName(DType t);
@@ -42,6 +43,13 @@ struct TensorView {
     }
 };
 
+// Row-wise f32 view of a 2-D weight. read(row, out) is safe to call from several threads.
+struct RowSource {
+    int rows = 0;
+    int cols = 0;
+    std::function<void(int, float*)> read;
+};
+
 class TensorStore {
 public:
     // Loads every checkpoint file of one model folder (sharded safetensors supported).
@@ -50,6 +58,13 @@ public:
     bool has(const std::string& name) const { return tensors_.count(name) != 0; }
     const TensorView& get(const std::string& name) const;
     const std::unordered_map<std::string, TensorView>& all() const { return tensors_; }
+
+    // True for tensors that only describe how another tensor is quantized (FP8 checkpoint scales).
+    static bool isQuantScale(const std::string& name);
+
+    // Rows of a 2-D float tensor as f32. FP8 (E4M3) checkpoints such as Qwen3-*-FP8 are dequantized with the
+    // "<name>_scale_inv" (or "<name>_scale") block scales stored next to the weight.
+    RowSource rows(const std::string& name) const;
 
     // Converts any float dtype to f32.
     std::vector<float> toF32(const std::string& name) const;

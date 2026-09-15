@@ -31,6 +31,7 @@ class MainActivity : ComponentActivity() {
                             Screen.Settings -> SettingsScreen(vm)
                             Screen.About -> AboutScreen(vm)
                             Screen.AddModels -> AddModelsScreen(vm)
+                            Screen.Themes -> ThemesScreen(vm)
                         }
                     }
                 }
