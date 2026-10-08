@@ -40,8 +40,36 @@ data class LocalModel(
     /** Files the engine needs (config, tokenizer, checkpoint shards). */
     val loadFiles: List<String>,
     val problem: String?,
+    /** Set for ReALM checkpoints (realm.json next to a GPT-2 checkpoint). */
+    val realm: RealmMarker? = null,
 ) {
     val supported: Boolean get() = problem == null
+}
+
+/**
+ * ReALM writes realm.json into its checkpoint folders, e.g.
+ * {"family": "realm", "version": "0.1.0", "base_architecture": "gpt2", "chat_format": "realm-v1"}.
+ * config.json keeps model_type "gpt2" (Transformers' own "realm" type is Google's unrelated REALM),
+ * so the marker file is what tells a ReALM checkpoint from plain GPT-2.
+ */
+data class RealmMarker(val version: String, val baseArchitecture: String, val chatFormat: String) {
+    val label: String get() = "ReALM v$version"
+
+    companion object {
+        const val FILE = "realm.json"
+        const val CHAT_FORMAT_V1 = "realm-v1"
+
+        /** Null unless the file is a ReALM marker. */
+        fun parse(json: String): RealmMarker? = runCatching {
+            val o = JSONObject(json)
+            if (o.optString("family") != "realm") return null
+            RealmMarker(
+                version = o.optString("version", "?"),
+                baseArchitecture = o.optString("base_architecture", "gpt2"),
+                chatFormat = o.optString("chat_format", CHAT_FORMAT_V1),
+            )
+        }.getOrNull()
+    }
 }
 
 /** A model folder materialised as a real directory path for the native engine. */
@@ -58,7 +86,26 @@ interface ModelSource {
 }
 
 /** config.json "model_type" values the native engine can run. */
-val SUPPORTED_ARCHITECTURES = setOf("gpt2", "qwen3")
+val SUPPORTED_ARCHITECTURES = setOf("gpt2", "qwen3", "granitemoehybrid")
+
+/** Human-readable names of the supported families, for messages. */
+const val SUPPORTED_FAMILIES = "GPT-2, Qwen3 and Granite 4.0-H"
+
+/**
+ * Why the native engine can't run a model with this config.json, or null when it can. Granite's
+ * "granitemoehybrid" type also covers mixture-of-experts models (4.0-H Tiny/Small) that it can't run yet.
+ */
+fun unsupportedReason(config: JSONObject): String? {
+    val type = config.optString("model_type", "unknown")
+    return when {
+        type !in SUPPORTED_ARCHITECTURES -> "Architecture \"$type\" isn't supported yet"
+        type == "granitemoehybrid" && config.optInt("num_local_experts", 0) > 0 ->
+            "Granite mixture-of-experts models aren't supported yet"
+        type == "granitemoehybrid" && config.optString("position_embedding_type", "nope") != "nope" ->
+            "Only Granite 4.0-H models are supported"
+        else -> null
+    }
+}
 
 /** App-private models folder: adb push target and Hugging Face download destination. */
 fun appModelsDir(context: Context): File =
@@ -73,22 +120,27 @@ private fun describe(
     name: String,
     files: Map<String, Long>,
     location: ModelLocation,
-    readConfig: () -> String?,
+    readText: (String) -> String?,
 ): LocalModel? {
     val checkpoints = files.keys.filter { n -> CHECKPOINT_EXTENSIONS.any { n.endsWith(it) } }.sorted()
     if (checkpoints.isEmpty() && "config.json" !in files) return null
     val safetensors = checkpoints.filter { it.endsWith(".safetensors") }
     // Mirrors the native loader: every safetensors shard, otherwise the first PyTorch file.
     val used = safetensors.ifEmpty { checkpoints.take(1) }
-    val architecture = if ("config.json" in files) {
-        runCatching { JSONObject(readConfig() ?: "{}").optString("model_type", "unknown") }.getOrDefault("unknown")
-    } else "unknown"
+    val config = if ("config.json" in files) runCatching { JSONObject(readText("config.json") ?: "{}") }.getOrNull() else null
+    val architecture = config?.optString("model_type", "unknown") ?: "unknown"
+    val unsupported = unsupportedReason(config ?: JSONObject())
+    val realm = if (RealmMarker.FILE in files) runCatching { readText(RealmMarker.FILE) }.getOrNull()?.let(RealmMarker::parse) else null
     val hasTokenizer = "tokenizer.json" in files || ("vocab.json" in files && "merges.txt" in files)
     val problem = when {
         "config.json" !in files -> "Missing config.json"
         checkpoints.isEmpty() -> "No .safetensors or .pt weights"
         !hasTokenizer -> "Missing tokenizer files"
-        architecture !in SUPPORTED_ARCHITECTURES -> "Architecture \"$architecture\" isn't supported yet"
+        unsupported != null -> unsupported
+        realm != null && (realm.baseArchitecture != "gpt2" || architecture != "gpt2") ->
+            "${realm.label} needs a GPT-2 base"
+        realm != null && realm.chatFormat != RealmMarker.CHAT_FORMAT_V1 ->
+            "${realm.label} chat format \"${realm.chatFormat}\" isn't supported yet"
         else -> null
     }
     return LocalModel(
@@ -100,6 +152,7 @@ private fun describe(
         sizeBytes = used.sumOf { files[it] ?: 0L },
         loadFiles = SUPPORT_FILES.filter { it in files } + used,
         problem = problem,
+        realm = realm,
     )
 }
 
@@ -109,8 +162,8 @@ class LocalFolderSource(private val root: File) : ModelSource {
         val candidates = listOf(root) + (root.listFiles()?.filter { it.isDirectory } ?: emptyList())
         return candidates.mapNotNull { dir ->
             val files = dir.listFiles()?.filter { it.isFile }?.associate { it.name to it.length() } ?: return@mapNotNull null
-            describe(dir.absolutePath, if (dir == root) "App folder" else dir.name, files, ModelLocation.Directory(dir)) {
-                File(dir, "config.json").readText()
+            describe(dir.absolutePath, if (dir == root) "App folder" else dir.name, files, ModelLocation.Directory(dir)) { name ->
+                File(dir, name).takeIf { it.isFile }?.readText()
             }
         }
     }
@@ -136,8 +189,8 @@ class SafFolderSource(context: Context, private val treeUri: Uri) : ModelSource 
     private fun inspect(folderId: String, name: String, docs: List<Doc>): LocalModel? {
         val files = docs.filter { it.mime != Document.MIME_TYPE_DIR }
         val ids = files.associate { it.name to it.id }
-        return describe("$treeUri#$folderId", name, files.associate { it.name to it.size }, ModelLocation.Tree(treeUri, ids)) {
-            ids["config.json"]?.let { id ->
+        return describe("$treeUri#$folderId", name, files.associate { it.name to it.size }, ModelLocation.Tree(treeUri, ids)) { file ->
+            ids[file]?.let { id ->
                 resolver.openInputStream(DocumentsContract.buildDocumentUriUsingTree(treeUri, id))?.use { it.readBytes().decodeToString() }
             }
         }

@@ -2,6 +2,7 @@
 // for CPU and GPU; the engine only sees this interface.
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <initializer_list>
@@ -67,6 +68,13 @@ public:
     // Processes tokens[0..T) at positions [pos0, pos0 + T) and writes the last token's logits (vocab floats).
     virtual void forward(const int* tokens, int T, int pos0, float* logits) = 0;
 
+    // Rewinding. A KV cache can resume at any cached position; a recurrent state (Mamba) only at the positions
+    // it saved. resumeFrom(pos) puts the model in the state after the first r <= pos tokens and returns r;
+    // saveRestorePoint(pos) is called right after a forward() that ended at pos (the engine calls it one token
+    // before the end of each prompt, where a redo or an edit of the last message resumes).
+    virtual int resumeFrom(int pos) { return pos; }
+    virtual void saveRestorePoint(int /*pos*/) {}
+
     const ModelShape& shape() const { return shape_; }
     int contextLength() const { return shape_.context; }
     std::string backendName() const { return gpu_ ? gpu_->name() : "CPU"; }
@@ -109,6 +117,8 @@ protected:
     // Weights in the requested format: the rows of all named tensors, concatenated. CPU loaders add what they
     // keep to weightBytes_; GPU uploads are counted by weightBuffer().
     QMatrix matrix(TensorStore& ts, std::initializer_list<std::string> names);
+    // One tensor with every weight multiplied by scale (Granite folds its attention/residual multipliers in).
+    QMatrix scaledMatrix(TensorStore& ts, const std::string& name, float scale);
     // Same from an f16 [rows][cols] array (GPT-2's Conv1D weights after transposing).
     QMatrix matrix(const std::vector<uint16_t>& f16, int rows, int cols);
     size_t matrixRowBytes(int cols) const { return quantRowBytes(formatFor(cols, weights_), cols); }
@@ -144,6 +154,8 @@ protected:
     size_t workBytes_ = 0;
     size_t kvBytesPerToken_ = 0;
     bool kvPreallocated_ = false;
+    // Recurrent state and its restore points (Mamba), counted as chat memory; may change during generation.
+    std::atomic<size_t> stateBytes_{0};
 
 private:
     static WeightFormat formatFor(int cols, WeightFormat f) { return cols % kQuantBlock == 0 ? f : WeightFormat::F16; }
@@ -153,7 +165,7 @@ private:
     unsigned used_ = 0;  // bit per WeightFormat actually stored (F16 fallback for widths that aren't % 32)
 };
 
-// config.json "model_type" ("gpt2", "qwen3", ...).
+// config.json "model_type" ("gpt2", "qwen3", "granitemoehybrid", ...).
 std::string readModelType(const std::string& modelDir);
 
 std::unique_ptr<Model> loadModel(const std::string& modelType, const std::string& modelDir, const LoadOptions& opt,

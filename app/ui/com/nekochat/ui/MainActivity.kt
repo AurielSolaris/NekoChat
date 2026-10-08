@@ -7,6 +7,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
+import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.nekochat.ui.theme.NekoBackground
 import com.nekochat.ui.theme.NekoTheme
@@ -20,6 +21,9 @@ class MainActivity : ComponentActivity() {
                 val vm: ChatViewModel = viewModel()
                 // Chats (and first-run Setup) are the root: back there leaves the app.
                 BackHandler(enabled = !vm.atRoot) { vm.back() }
+                LaunchedEffect(vm.screen) { vm.onScreenShown(vm.screen) }
+                SpeechOfferDialog(vm)
+                DictationOfferDialog(vm)
                 NekoBackground {
                     Crossfade(targetState = vm.screen, animationSpec = tween(220), label = "screen") { screen ->
                         when (screen) {
@@ -32,6 +36,7 @@ class MainActivity : ComponentActivity() {
                             Screen.About -> AboutScreen(vm)
                             Screen.AddModels -> AddModelsScreen(vm)
                             Screen.Themes -> ThemesScreen(vm)
+                            Screen.Accessibility -> AccessibilityScreen(vm)
                         }
                     }
                 }

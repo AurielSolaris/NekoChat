@@ -7,8 +7,13 @@ import android.util.Log
 import com.nekochat.data.DownloadDao
 import com.nekochat.data.DownloadEntity
 import com.nekochat.data.NekoDatabase
-import com.nekochat.engine.SUPPORTED_ARCHITECTURES
+import com.nekochat.engine.SUPPORTED_FAMILIES
+import com.nekochat.engine.unsupportedReason
 import com.nekochat.engine.appModelsDir
+import com.nekochat.speech.DictationFiles
+import com.nekochat.speech.DictationModel
+import com.nekochat.speech.KokoroVoices
+import com.nekochat.speech.SpeechFiles
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -46,7 +51,8 @@ class HubDownloadService(private val context: Context) : ModelDownloadService {
 
     private val aria2 = Aria2Engine(context, modelsDir)
     private val fetch = FetchEngine()
-    private var defaultEngine = DownloadEngine.Aria2Multi
+    private val hasAria2 = aria2Available(context)
+    private var defaultEngine = if (hasAria2) DownloadEngine.Aria2Multi else DownloadEngine.Fetch
 
     private class Task(
         val repoId: String,
@@ -54,6 +60,7 @@ class HubDownloadService(private val context: Context) : ModelDownloadService {
         val files: List<HuggingFaceHub.RepoFile>,
         val createdAt: Long,
         val engine: DownloadEngine,
+        val kind: DownloadKind,
     ) {
         val handles = mutableMapOf<String, String>()  // path -> engine handle
     }
@@ -65,20 +72,21 @@ class HubDownloadService(private val context: Context) : ModelDownloadService {
         scope.launch {
             for (e in dao.all()) {
                 val engine = DownloadEngine.entries.firstOrNull { it.name == e.engine } ?: DownloadEngine.Aria2Multi
-                val task = Task(e.repoId, e.folderName, parseFiles(e.files), e.createdAt, engine)
+                val kind = DownloadKind.entries.firstOrNull { it.name == e.kind } ?: DownloadKind.Model
+                val task = Task(e.repoId, e.folderName, parseFiles(e.files), e.createdAt, engine, kind)
                 val status = runCatching { DownloadStatus.valueOf(e.status) }.getOrDefault(DownloadStatus.Failed)
                     .let { if (it == DownloadStatus.Preparing || it == DownloadStatus.Downloading) DownloadStatus.Paused else it }
                 if (status != DownloadStatus.Completed) tasks[e.repoId] = task
                 put(ModelDownload(e.repoId, status, bytesDone = if (status == DownloadStatus.Completed) e.bytesTotal else onDisk(task),
-                    bytesTotal = e.bytesTotal, error = e.error, engine = engine,
-                    folder = if (status == DownloadStatus.Completed) File(modelsDir, e.folderName).path else null))
+                    bytesTotal = e.bytesTotal, error = e.error, engine = engine, kind = kind,
+                    folder = if (status == DownloadStatus.Completed) installDir(task).path else null))
             }
         }
     }
 
     // ------------------------------------------------------------ ModelDownloadService
 
-    override fun start(repoId: String) {
+    override fun start(repoId: String, kind: DownloadKind) {
         val id = repoId.trim().removePrefix("https://").removePrefix("huggingface.co/").trim('/')
         scope.launch {
             val existing = state.value.firstOrNull { it.repoId == id }
@@ -87,26 +95,41 @@ class HubDownloadService(private val context: Context) : ModelDownloadService {
                 return@launch
             }
             if (!REPO.matches(id)) {
-                put(ModelDownload(id, DownloadStatus.Failed, error = "Use the form owner/model, e.g. Qwen/Qwen3-0.6B."))
+                put(ModelDownload(id, DownloadStatus.Failed, error = "Use the form owner/model, e.g. Qwen/Qwen3-0.6B.", kind = kind))
                 return@launch
             }
-            val engine = defaultEngine
-            put(ModelDownload(id, DownloadStatus.Preparing, engine = engine))
+            val engine = if (hasAria2) defaultEngine else DownloadEngine.Fetch
+            put(ModelDownload(id, DownloadStatus.Preparing, engine = engine, kind = kind))
             try {
                 checkNetworkAllowed()
-                val files = HuggingFaceHub.modelFiles(id)
-                val arch = HuggingFaceHub.modelType(id)
-                if (arch !in SUPPORTED_ARCHITECTURES) {
-                    throw DownloadException("This is a \"$arch\" model. NekoChat runs GPT-2 and Qwen3 models.")
+                val files = when (kind) {
+                    DownloadKind.Speech -> HuggingFaceHub.speechFiles(id, KokoroVoices.all.map { it.id })
+                    DownloadKind.Dictation -> HuggingFaceHub.dictationFiles(id, DictationFiles.FILES)
+                    DownloadKind.Model -> {
+                        val config = HuggingFaceHub.config(id)
+                        unsupportedReason(config)?.let { why ->
+                            val arch = config.optString("model_type", "unknown")
+                            throw DownloadException("$why. This is a \"$arch\" model; NekoChat runs $SUPPORTED_FAMILIES models.")
+                        }
+                        HuggingFaceHub.modelFiles(id)
+                    }
                 }
-                val task = Task(id, uniqueFolderName(id.substringAfterLast('/')), files, System.currentTimeMillis(), engine)
+                val task = Task(id, uniqueFolderName(id.substringAfterLast('/')), files, System.currentTimeMillis(), engine, kind)
                 tasks[id] = task
-                put(ModelDownload(id, DownloadStatus.Downloading, bytesTotal = files.sumOf { it.size }, engine = engine))
+                put(ModelDownload(id, DownloadStatus.Downloading, bytesTotal = files.sumOf { it.size }, engine = engine, kind = kind))
                 launch(task)
             } catch (e: Exception) {
                 fail(id, e)
             }
         }
+    }
+
+    /** Where a finished download lives: chat models in the models folder, the voice in the speech folder. */
+    private fun installDir(task: Task): File = when (task.kind) {
+        DownloadKind.Speech -> SpeechFiles.kokoroDir(context)
+        DownloadKind.Dictation -> DictationModel.byRepo(task.repoId)?.let { DictationFiles.dir(context, it) }
+            ?: File(DictationFiles.dir(context, DictationModel.GraniteNc).parentFile, task.folderName)
+        DownloadKind.Model -> File(modelsDir, task.folderName)
     }
 
     override fun pause(repoId: String) {
@@ -158,7 +181,7 @@ class HubDownloadService(private val context: Context) : ModelDownloadService {
 
     // ------------------------------------------------------------ internals
 
-    private fun engineOf(task: Task): TransferEngine = if (task.engine == DownloadEngine.Fetch) fetch else aria2
+    private fun engineOf(task: Task): TransferEngine = if (task.engine == DownloadEngine.Fetch || !hasAria2) fetch else aria2
 
     /**
      * Some ROMs switch off network access for newly installed apps ("Allow network access" under
@@ -265,9 +288,15 @@ class HubDownloadService(private val context: Context) : ModelDownloadService {
     private suspend fun finish(task: Task) {
         task.handles.values.forEach { engineOf(task).remove(it) }
         val from = File(stagingDir, task.folderName)
-        from.listFiles()?.filter { it.name.endsWith(".aria2") }?.forEach { it.delete() }
-        var target = File(modelsDir, task.folderName)
-        if (target.exists()) target = File(modelsDir, uniqueFolderName(task.folderName))
+        from.walkTopDown().filter { it.name.endsWith(".aria2") }.forEach { it.delete() }
+        var target = installDir(task)
+        if (task.kind != DownloadKind.Model) {
+            // A reinstall replaces the previous voice or speech model files.
+            target.deleteRecursively()
+            target.parentFile?.mkdirs()
+        } else if (target.exists()) {
+            target = File(modelsDir, uniqueFolderName(task.folderName))
+        }
         if (!from.renameTo(target)) {
             fail(task.repoId, DownloadException("Couldn't move the model into place."))
             return
@@ -324,6 +353,7 @@ class HubDownloadService(private val context: Context) : ModelDownloadService {
         error = error,
         createdAt = task.createdAt,
         engine = task.engine.name,
+        kind = task.kind.name,
     )
 
     private fun parseFiles(json: String): List<HuggingFaceHub.RepoFile> = runCatching {

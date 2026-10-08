@@ -30,6 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.nekochat.ui.theme.Neko
+import com.nekochat.ui.theme.Spectral
 import com.nekochat.ui.theme.NekoRadius
 
 private data class License(val title: String, val asset: String)
@@ -45,6 +46,14 @@ fun AboutScreen(vm: ChatViewModel) {
         License("GNU General Public License v3", "licenses/GPL-3.0.txt"),
         License("aria2 (GPL-2.0-or-later)", "licenses/aria2-COPYING.txt"),
         License("OpenSSL License", "licenses/openssl-LICENSE.txt"),
+        License("zlib License", "licenses/zlib-LICENSE.txt"),
+        License("expat (MIT)", "licenses/expat-COPYING.txt"),
+        License("c-ares (MIT)", "licenses/c-ares-LICENSE.txt"),
+        License("libssh2 (BSD-3-Clause)", "licenses/libssh2-COPYING.txt"),
+        License("Kokoro (Apache License 2.0)", "licenses/kokoro-LICENSE.txt"),
+        License("misaki (Apache License 2.0)", "licenses/misaki-LICENSE.txt"),
+        License("Open Sans font (SIL OFL 1.1)", "licenses/opensans-OFL.txt"),
+        License("Spectral font (SIL OFL 1.1)", "licenses/spectral-OFL.txt"),
     )
 
     Column(
@@ -69,7 +78,7 @@ fun AboutScreen(vm: ChatViewModel) {
             Spacer(Modifier.height(4.dp))
 
             SettingsGroup("NekoChat") {
-                InfoRow("Models", "GPT-2 and Qwen3 · SafeTensors or PyTorch")
+                InfoRow("Models", "GPT-2, Qwen3 and Granite 4.0-H · SafeTensors or PyTorch")
                 InfoRow("Engine", "NekoChat's own C++ engine · NEON CPU, Vulkan, OpenGL ES")
                 InfoRow("Privacy", "Chats and models stay on this phone. The internet is only used to download models.")
             }
@@ -87,6 +96,12 @@ fun AboutScreen(vm: ChatViewModel) {
                 NavRow("aria2 1.37.0", "Model downloads · GPL-2.0-or-later") { shown = licenses[1].asset }
                 NavRow("OpenSSL, zlib, expat, c-ares, libssh2", "Built into aria2 · OpenSSL License and others") {
                     shown = licenses[2].asset
+                }
+                NavRow("Kokoro-82M by hexgrad", "Read-aloud voice, downloaded on request · Apache-2.0") {
+                    shown = licenses[3].asset
+                }
+                NavRow("misaki lexicons by hexgrad", "English pronunciation for Kokoro · Apache-2.0") {
+                    shown = licenses[4].asset
                 }
                 InfoRow("Jetpack Compose, Room, Kotlin coroutines", "Apache License 2.0")
             }
@@ -114,7 +129,7 @@ private fun LicenseDialog(title: String, asset: String, onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         containerColor = Neko.SurfaceElevated,
         shape = RoundedCornerShape(NekoRadius.XLarge),
-        title = { Text(title, color = Neko.Text, fontSize = 18.sp, fontWeight = FontWeight.SemiBold) },
+        title = { Text(title, color = Neko.Text, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, fontFamily = Spectral) },
         text = {
             Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
                 Text(text, color = Neko.TextSecondary, fontSize = 11.sp, lineHeight = 15.sp, fontFamily = FontFamily.Monospace)

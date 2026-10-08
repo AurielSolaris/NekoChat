@@ -6,6 +6,7 @@
 
 #include "common.h"
 #include "gpt2_model.h"
+#include "granite_model.h"
 #include "json.h"
 #include "qwen3_model.h"
 #include "tensor_store.h"
@@ -30,6 +31,10 @@ MemoryStats Model::memory(int cachedTokens) const {
     m.kvUsed = size_t(cachedTokens) * kvBytesPerToken_;
     m.kvCapacity = size_t(shape_.context) * kvBytesPerToken_;
     m.kvResident = kvPreallocated_ ? m.kvCapacity : m.kvUsed;
+    const size_t state = stateBytes_.load(std::memory_order_relaxed);
+    m.kvUsed += state;
+    m.kvCapacity += state;
+    m.kvResident += state;
     return m;
 }
 
@@ -44,6 +49,18 @@ QMatrix Model::matrix(TensorStore& ts, std::initializer_list<std::string> names)
         else out.appendRows(m);
     }
     return out;
+}
+
+QMatrix Model::scaledMatrix(TensorStore& ts, const std::string& name, float scale) {
+    RowSource src = ts.rows(name);
+    WeightFormat f = formatFor(src.cols, weights_);
+    noteFormat(f);
+    auto read = src.read;
+    const int cols = src.cols;
+    return quantizeMatrix(f, src.rows, cols, [read, cols, scale](int r, float* out) {
+        read(r, out);
+        for (int c = 0; c < cols; c++) out[c] *= scale;
+    }, pool_.get());
 }
 
 QMatrix Model::matrix(const std::vector<uint16_t>& f16, int rows, int cols) {
@@ -159,6 +176,7 @@ std::string readModelType(const std::string& dir) {
     for (auto& a : c["architectures"].items()) {
         if (starts_with(a.str(), "GPT2")) return "gpt2";
         if (starts_with(a.str(), "Qwen3")) return "qwen3";
+        if (starts_with(a.str(), "GraniteMoeHybrid")) return "granitemoehybrid";
     }
     return "unknown";
 }
@@ -167,7 +185,8 @@ std::unique_ptr<Model> loadModel(const std::string& type, const std::string& dir
                                  const ProgressFn& progress) {
     if (type == "gpt2") return std::make_unique<Gpt2Model>(dir, opt, progress);
     if (type == "qwen3") return std::make_unique<Qwen3Model>(dir, opt, progress);
-    fail("unsupported architecture '" + type + "' (NekoChat runs GPT-2 and Qwen3 models)");
+    if (type == "granitemoehybrid") return std::make_unique<GraniteModel>(dir, opt, progress);
+    fail("unsupported architecture '" + type + "' (NekoChat runs GPT-2, Qwen3 and Granite 4.0-H models)");
 }
 
 }  // namespace neko

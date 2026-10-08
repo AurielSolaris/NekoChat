@@ -15,6 +15,15 @@ interface ChatFormat {
 
     /** Text that ends a reply (the engine also stops on end-of-text / end-of-turn tokens). */
     fun stopSequences(userName: String): List<String>
+
+    /**
+     * When set, the prompt keeps only the newest this-many tokens, cut anywhere, instead of dropping
+     * whole turns to fit the model's context. For models trained on windows of a token stream.
+     */
+    val contextTokens: Int? get() = null
+
+    /** False when the format has no place for the chat's persona text. */
+    val usesPersona: Boolean get() = true
 }
 
 /**

@@ -110,7 +110,8 @@ private fun ModelRow(model: LocalModel, selected: Boolean, onClick: () -> Unit) 
             Text(model.name, color = Neko.Text, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1,
                 overflow = TextOverflow.Ellipsis)
             Text(
-                "${architectureLabel(model.architecture)} · ${if (model.format == "safetensors") "SafeTensors" else "PyTorch"} · " +
+                (model.realm?.let { "${it.label} · " } ?: "") +
+                    "${architectureLabel(model.architecture)} · ${if (model.format == "safetensors") "SafeTensors" else "PyTorch"} · " +
                     formatBytes(model.sizeBytes),
                 color = Neko.TextSecondary,
                 fontSize = 12.sp,
@@ -136,6 +137,7 @@ private fun ModelRow(model: LocalModel, selected: Boolean, onClick: () -> Unit) 
 fun architectureLabel(arch: String): String = when (arch) {
     "gpt2" -> "GPT-2"
     "qwen3" -> "Qwen3"
+    "granitemoehybrid" -> "Granite 4.0-H"
     else -> arch.uppercase()
 }
 

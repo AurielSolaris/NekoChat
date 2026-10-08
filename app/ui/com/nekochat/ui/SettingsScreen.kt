@@ -108,16 +108,28 @@ fun SettingsScreen(vm: ChatViewModel) {
                 NavRow("Theme", vm.theme.label, onClick = vm::openThemes)
             }
 
+            SettingsGroup("Accessibility") {
+                NavRow(
+                    "Read aloud and narration",
+                    listOfNotNull(
+                        "Replies read aloud".takeIf { vm.readReplies },
+                        "Narration on".takeIf { vm.narrate },
+                    ).joinToString(" · ").ifEmpty { "Off · voice ${if (vm.kokoroInstalled) "Kokoro" else "not downloaded"}" },
+                    onClick = vm::openAccessibility,
+                )
+            }
+
             SettingsGroup("Downloads") {
                 Text("Downloader", color = Neko.Text, fontSize = 15.sp)
                 Spacer(Modifier.height(8.dp))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DownloadEngine.entries.forEach { e ->
+                    DownloadEngine.entries.filter { vm.hasAria2 || it == DownloadEngine.Fetch }.forEach { e ->
                         Chip(e.label, selected = vm.downloadEngine == e) { vm.selectDownloadEngine(e) }
                     }
                 }
                 Text(
-                    vm.downloadEngine.detail + " Applies to new downloads; running ones keep their downloader.",
+                    if (vm.hasAria2) vm.downloadEngine.detail + " Applies to new downloads; running ones keep their downloader."
+                    else vm.downloadEngine.detail + " This build doesn't include aria2.",
                     color = Neko.TextMuted,
                     fontSize = 12.sp,
                     lineHeight = 17.sp,
@@ -169,6 +181,8 @@ private fun MemorySection(vm: ChatViewModel, weightsLabel: String) {
             else "${formatBytes(usage.kvUsed)} of ${formatBytes(usage.kvCapacity)}",
         )
         MemoryRow("Working buffers", formatBytes(usage.workspace))
+        vm.speech.weightBytes.takeIf { it > 0 }?.let { MemoryRow("Voice (Kokoro)", formatBytes(it)) }
+        vm.dictationWeightBytes.takeIf { it > 0 }?.let { MemoryRow("Voice input (Granite Speech)", formatBytes(it)) }
         if (usage.appResident > 0) MemoryRow("Whole app (RAM)", formatBytes(usage.appResident))
     }
 }

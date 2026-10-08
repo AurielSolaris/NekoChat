@@ -30,6 +30,9 @@ data class ChatSettings(
 
     companion object {
         const val MAX_REPLY_TOKENS = 4096
+
+        /** ReALM's own chat defaults (temperature 0.8, top-k 40, up to 256 tokens; no top-p, no repeat penalty). */
+        val REALM = ChatSettings(topP = 1f, repeatPenalty = 1f, maxNewTokens = 256)
     }
 }
 

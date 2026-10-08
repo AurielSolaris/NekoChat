@@ -2,11 +2,16 @@
 // the Kotlin inference thread (GPU contexts are bound to it).
 #include <jni.h>
 
+#include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "common.h"
 #include "engine.h"
+#include "granite_speech_model.h"
+#include "kokoro_g2p.h"
+#include "kokoro_model.h"
 
 using neko::Engine;
 
@@ -128,6 +133,129 @@ JNIEXPORT jdoubleArray JNICALL Java_com_nekochat_engine_NativeBridge_nativeGener
                        st.prefillMs,  st.decodeMs, double(st.stopReason)};
         jdoubleArray out = env->NewDoubleArray(6);
         env->SetDoubleArrayRegion(out, 0, 6, v);
+        return out;
+    } catch (const std::exception& ex) {
+        if (!env->ExceptionCheck()) throwJava(env, ex.what());
+        return nullptr;
+    }
+}
+
+// ------------------------------------------------------------------ text-to-speech (Kokoro)
+
+struct Tts {
+    std::unique_ptr<neko::KokoroModel> model;
+    std::unique_ptr<neko::KokoroG2P> us, gb;
+    std::string lexiconDir;
+    std::map<std::string, std::unique_ptr<neko::KokoroVoice>> voices;
+};
+
+static Tts* tts(jlong h) { return reinterpret_cast<Tts*>(h); }
+
+JNIEXPORT jlong JNICALL Java_com_nekochat_engine_NativeBridge_nativeTtsLoad(JNIEnv* env, jclass, jstring modelDir,
+                                                                            jstring lexiconDir, jint weights,
+                                                                            jint threads) {
+    try {
+        auto t = std::make_unique<Tts>();
+        neko::LoadOptions opt;
+        opt.backend = neko::BackendPref::CPU;
+        opt.threads = threads;
+        opt.weights = static_cast<neko::WeightFormat>(weights);
+        t->model = std::make_unique<neko::KokoroModel>(jstr(env, modelDir), opt, [](float, const std::string&) {});
+        t->lexiconDir = jstr(env, lexiconDir);
+        return reinterpret_cast<jlong>(t.release());
+    } catch (const std::exception& ex) {
+        if (!env->ExceptionCheck()) throwJava(env, ex.what());
+        return 0;
+    }
+}
+
+JNIEXPORT void JNICALL Java_com_nekochat_engine_NativeBridge_nativeTtsRelease(JNIEnv*, jclass, jlong h) {
+    delete tts(h);
+}
+
+JNIEXPORT jlong JNICALL Java_com_nekochat_engine_NativeBridge_nativeTtsWeightBytes(JNIEnv*, jclass, jlong h) {
+    return jlong(tts(h)->model->weightBytes());
+}
+
+// English text -> phonemes; the US or UK lexicon is loaded on first use.
+JNIEXPORT jstring JNICALL Java_com_nekochat_engine_NativeBridge_nativeTtsPhonemize(JNIEnv* env, jclass, jlong h,
+                                                                                  jbyteArray utf8, jboolean british) {
+    try {
+        Tts* t = tts(h);
+        auto& g2p = british ? t->gb : t->us;
+        if (!g2p) {
+            const std::string p = t->lexiconDir + (british ? "/gb_" : "/us_");
+            g2p = std::make_unique<neko::KokoroG2P>(p + "gold.json", p + "silver.json", british);
+        }
+        return env->NewStringUTF(g2p->phonemize(bytesToString(env, utf8)).c_str());
+    } catch (const std::exception& ex) {
+        if (!env->ExceptionCheck()) throwJava(env, ex.what());
+        return nullptr;
+    }
+}
+
+// Phonemes (at most 510 of them) -> 24 kHz samples with the voice pack at voicePath.
+JNIEXPORT jfloatArray JNICALL Java_com_nekochat_engine_NativeBridge_nativeTtsSynthesize(
+    JNIEnv* env, jclass, jlong h, jbyteArray phonemes, jstring voicePath, jfloat speed, jlong seed) {
+    try {
+        Tts* t = tts(h);
+        const std::string path = jstr(env, voicePath);
+        auto& voice = t->voices[path];
+        if (!voice) voice = std::make_unique<neko::KokoroVoice>(path);
+        std::vector<int> ids;
+        for (char32_t c : neko::utf8To32(bytesToString(env, phonemes))) {
+            int id = t->model->phonemeId(neko::utf32To8(std::u32string(1, c)));
+            if (id >= 0) ids.push_back(id);
+            if (int(ids.size()) == neko::KokoroModel::kMaxPhonemes) break;
+        }
+        std::vector<float> pcm;
+        if (!ids.empty()) pcm = t->model->synthesize(ids, voice->style(int(ids.size())), speed, uint64_t(seed));
+        jfloatArray out = env->NewFloatArray(jsize(pcm.size()));
+        if (!pcm.empty()) env->SetFloatArrayRegion(out, 0, jsize(pcm.size()), pcm.data());
+        return out;
+    } catch (const std::exception& ex) {
+        if (!env->ExceptionCheck()) throwJava(env, ex.what());
+        return nullptr;
+    }
+}
+
+// ------------------------------------------------------------------ speech to text (Granite Speech)
+
+static neko::GraniteSpeechModel* asr(jlong h) { return reinterpret_cast<neko::GraniteSpeechModel*>(h); }
+
+JNIEXPORT jlong JNICALL Java_com_nekochat_engine_NativeBridge_nativeAsrLoad(JNIEnv* env, jclass, jstring modelDir,
+                                                                            jint weights, jint threads) {
+    try {
+        neko::LoadOptions opt;
+        opt.backend = neko::BackendPref::CPU;
+        opt.threads = threads;
+        opt.weights = static_cast<neko::WeightFormat>(weights);
+        auto m = std::make_unique<neko::GraniteSpeechModel>(jstr(env, modelDir), opt, [](float, const std::string&) {});
+        return reinterpret_cast<jlong>(m.release());
+    } catch (const std::exception& ex) {
+        if (!env->ExceptionCheck()) throwJava(env, ex.what());
+        return 0;
+    }
+}
+
+JNIEXPORT void JNICALL Java_com_nekochat_engine_NativeBridge_nativeAsrRelease(JNIEnv*, jclass, jlong h) {
+    delete asr(h);
+}
+
+JNIEXPORT jlong JNICALL Java_com_nekochat_engine_NativeBridge_nativeAsrWeightBytes(JNIEnv*, jclass, jlong h) {
+    return jlong(asr(h)->weightBytes());
+}
+
+// UTF-8 bytes rather than a jstring: NewStringUTF expects modified UTF-8, which mangles 4-byte characters.
+JNIEXPORT jbyteArray JNICALL Java_com_nekochat_engine_NativeBridge_nativeAsrTranscribe(JNIEnv* env, jclass, jlong h,
+                                                                                      jfloatArray pcm) {
+    try {
+        const jsize n = env->GetArrayLength(pcm);
+        std::vector<float> samples(static_cast<size_t>(n));
+        if (n > 0) env->GetFloatArrayRegion(pcm, 0, n, samples.data());
+        const std::string text = asr(h)->transcribe(samples.data(), samples.size());
+        jbyteArray out = env->NewByteArray(jsize(text.size()));
+        if (!text.empty()) env->SetByteArrayRegion(out, 0, jsize(text.size()), reinterpret_cast<const jbyte*>(text.data()));
         return out;
     } catch (const std::exception& ex) {
         if (!env->ExceptionCheck()) throwJava(env, ex.what());

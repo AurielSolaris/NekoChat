@@ -311,6 +311,130 @@ void matmulFp4(ThreadPool& pool, const float* x, int T, int K, const QMatrix& W,
 }
 #endif
 
+#if defined(__aarch64__)
+// Many rows (prompt prefill, speech frames): a GEMM. The per-row kernels above re-decode every weight for each
+// group of 4 rows, which is compute-bound on cores without FP16 arithmetic. Here each thread takes groups of
+// 16-row weight panels, dequantizes a group once into f32 ([panel][K][16], at most ~512 KB), then walks K in
+// slices of kSliceK: a slice of the group's weights and of the activations stay in cache while every 4-row tile
+// accumulates a 4 x 16 block in registers; partial sums wait in a small per-thread buffer between slices. Any
+// weight format works: rows go through dequantizeRow.
+constexpr int kPanelRows = 16;
+constexpr int kPanelMinRows = 16;
+constexpr int kSliceK = 256;
+
+void matmulPanels(ThreadPool& pool, const float* x, int T, int K, const QMatrix& W, const float* bias, float* y, int N,
+                  int flags) {
+    const int panels = (W.rows + kPanelRows - 1) / kPanelRows;
+    const int group = std::max(1, std::min(4, int((512 << 10) / (size_t(K) * kPanelRows * 4))));
+    const int groups = (panels + group - 1) / group;
+    pool.parallelFor(groups, [&](int g0, int g1, int) {
+        std::vector<float> rows(size_t(kPanelRows) * size_t(K));  // [16][K] dequantized, then transposed
+        std::vector<float> pack(size_t(group) * size_t(K) * kPanelRows);
+        std::vector<float> part(size_t(T) * size_t(group) * kPanelRows);  // [T][group * 16] partial sums
+        const int width = group * kPanelRows;
+        for (int g = g0; g < g1; g++) {
+            const int pa = g * group, pn = std::min(group, panels - pa);
+            for (int q = 0; q < pn; q++) {
+                const int n0 = (pa + q) * kPanelRows, nr = std::min(kPanelRows, W.rows - n0);
+                float* dst = pack.data() + size_t(q) * size_t(K) * kPanelRows;
+                for (int r = 0; r < kPanelRows; r++) {
+                    float* rr = rows.data() + size_t(r) * size_t(K);
+                    if (r < nr) W.dequantizeRow(n0 + r, rr);
+                    else std::fill(rr, rr + K, 0.0f);
+                }
+                // 4 x 4 NEON transposes: sequential writes, 16 sequential read streams.
+                for (int k = 0; k + 4 <= K; k += 4) {
+                    for (int r = 0; r < kPanelRows; r += 4) {
+                        float32x4x4_t m = {{vld1q_f32(rows.data() + size_t(r) * size_t(K) + size_t(k)),
+                                            vld1q_f32(rows.data() + size_t(r + 1) * size_t(K) + size_t(k)),
+                                            vld1q_f32(rows.data() + size_t(r + 2) * size_t(K) + size_t(k)),
+                                            vld1q_f32(rows.data() + size_t(r + 3) * size_t(K) + size_t(k))}};
+                        // m.val[i][j] = row r+i, column k+j -> pack[(k+j)][r+i]
+                        float32x4_t t01a = vtrn1q_f32(m.val[0], m.val[1]), t01b = vtrn2q_f32(m.val[0], m.val[1]);
+                        float32x4_t t23a = vtrn1q_f32(m.val[2], m.val[3]), t23b = vtrn2q_f32(m.val[2], m.val[3]);
+                        float* o = dst + size_t(k) * kPanelRows + size_t(r);
+                        vst1q_f32(o, vreinterpretq_f32_f64(vtrn1q_f64(vreinterpretq_f64_f32(t01a), vreinterpretq_f64_f32(t23a))));
+                        vst1q_f32(o + kPanelRows, vreinterpretq_f32_f64(vtrn1q_f64(vreinterpretq_f64_f32(t01b), vreinterpretq_f64_f32(t23b))));
+                        vst1q_f32(o + 2 * kPanelRows, vreinterpretq_f32_f64(vtrn2q_f64(vreinterpretq_f64_f32(t01a), vreinterpretq_f64_f32(t23a))));
+                        vst1q_f32(o + 3 * kPanelRows, vreinterpretq_f32_f64(vtrn2q_f64(vreinterpretq_f64_f32(t01b), vreinterpretq_f64_f32(t23b))));
+                    }
+                }
+                for (int k = K & ~3; k < K; k++)
+                    for (int r = 0; r < kPanelRows; r++) dst[size_t(k) * kPanelRows + size_t(r)] = rows[size_t(r) * size_t(K) + size_t(k)];
+            }
+            for (int k0 = 0; k0 < K; k0 += kSliceK) {
+                const int k1 = std::min(K, k0 + kSliceK), k4 = k0 + ((k1 - k0) & ~3);
+                for (int t0 = 0; t0 < T; t0 += 4) {
+                    const int mt = std::min(4, T - t0);
+                    const float* xr[4];
+                    for (int i = 0; i < 4; i++) xr[i] = x + size_t(t0 + std::min(i, mt - 1)) * size_t(K);
+                    for (int q = 0; q < pn; q++) {
+                        float32x4_t acc[4][4];
+                        for (int i = 0; i < 4; i++)
+                            for (int j = 0; j < 4; j++)
+                                acc[i][j] = k0 == 0 || i >= mt
+                                                ? vdupq_n_f32(0.0f)
+                                                : vld1q_f32(part.data() + size_t(t0 + i) * size_t(width) +
+                                                            size_t(q * kPanelRows + 4 * j));
+                        const float* w = pack.data() + (size_t(q) * size_t(K) + size_t(k0)) * kPanelRows;
+                        int k = k0;
+                        for (; k < k4; k += 4, w += 4 * kPanelRows) {
+                            const float32x4_t xv[4] = {vld1q_f32(xr[0] + k), vld1q_f32(xr[1] + k),
+                                                       vld1q_f32(xr[2] + k), vld1q_f32(xr[3] + k)};
+#define NEKO_PANEL_STEP(L)                                                 \
+    {                                                                      \
+        const float* wl = w + (L) * kPanelRows;                            \
+        const float32x4_t w0 = vld1q_f32(wl), w1 = vld1q_f32(wl + 4);      \
+        const float32x4_t w2 = vld1q_f32(wl + 8), w3 = vld1q_f32(wl + 12); \
+        for (int i = 0; i < 4; i++) {                                      \
+            acc[i][0] = vfmaq_laneq_f32(acc[i][0], w0, xv[i], L);          \
+            acc[i][1] = vfmaq_laneq_f32(acc[i][1], w1, xv[i], L);          \
+            acc[i][2] = vfmaq_laneq_f32(acc[i][2], w2, xv[i], L);          \
+            acc[i][3] = vfmaq_laneq_f32(acc[i][3], w3, xv[i], L);          \
+        }                                                                  \
+    }
+                            NEKO_PANEL_STEP(0)
+                            NEKO_PANEL_STEP(1)
+                            NEKO_PANEL_STEP(2)
+                            NEKO_PANEL_STEP(3)
+#undef NEKO_PANEL_STEP
+                        }
+                        for (; k < k1; k++, w += kPanelRows) {
+                            const float32x4_t w0 = vld1q_f32(w), w1 = vld1q_f32(w + 4);
+                            const float32x4_t w2 = vld1q_f32(w + 8), w3 = vld1q_f32(w + 12);
+                            for (int i = 0; i < 4; i++) {
+                                const float32x4_t xi = vdupq_n_f32(xr[i][k]);
+                                acc[i][0] = vfmaq_f32(acc[i][0], w0, xi);
+                                acc[i][1] = vfmaq_f32(acc[i][1], w1, xi);
+                                acc[i][2] = vfmaq_f32(acc[i][2], w2, xi);
+                                acc[i][3] = vfmaq_f32(acc[i][3], w3, xi);
+                            }
+                        }
+                        for (int i = 0; i < mt; i++)
+                            for (int j = 0; j < 4; j++)
+                                vst1q_f32(part.data() + size_t(t0 + i) * size_t(width) + size_t(q * kPanelRows + 4 * j),
+                                          acc[i][j]);
+                    }
+                }
+            }
+            // Bias, activation and accumulate, once the whole K is summed.
+            for (int q = 0; q < pn; q++) {
+                const int n0 = (pa + q) * kPanelRows, nr = std::min(kPanelRows, W.rows - n0);
+                for (int t = 0; t < T; t++) {
+                    const float* src = part.data() + size_t(t) * size_t(width) + size_t(q * kPanelRows);
+                    float* yr = y + size_t(t) * size_t(N) + size_t(n0);
+                    for (int r = 0; r < nr; r++) {
+                        float v = src[r] + (bias ? bias[n0 + r] : 0.0f);
+                        if (flags & kGelu) v = gelu(v);
+                        yr[r] = (flags & kAccumulate) ? yr[r] + v : v;
+                    }
+                }
+            }
+        }
+    });
+}
+#endif
+
 // Portable fallback: dequantize each row, then plain dot products.
 void matmulGeneric(ThreadPool& pool, const float* x, int T, int K, const QMatrix& W, const float* bias, float* y, int N,
                    int flags) {
@@ -335,6 +459,13 @@ void matmulGeneric(ThreadPool& pool, const float* x, int T, int K, const QMatrix
 void matmul(ThreadPool& pool, const float* x, int T, int K, const QMatrix& W, const float* bias, float* y, int N,
             int flags) {
     if (W.cols != K) fail("matmul: weight width mismatch");
+#if defined(__aarch64__)
+    // Below this many rows the per-row kernels win: unpacking a panel costs about as much as 4 rows of work.
+    if (T >= kPanelMinRows) {
+        matmulPanels(pool, x, T, K, W, bias, y, N, flags);
+        return;
+    }
+#endif
     switch (W.format) {
         case WeightFormat::F16: matmulF16(pool, x, T, K, W.f16(), bias, y, N, flags); return;
 #if defined(__aarch64__)

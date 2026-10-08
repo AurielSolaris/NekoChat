@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <random>
@@ -20,7 +21,10 @@
 #include "common.h"
 #include "cpu_ops.h"
 #include "engine.h"
+#include "granite_speech_model.h"
 #include "json.h"
+#include "kokoro_g2p.h"
+#include "kokoro_model.h"
 
 using namespace neko;
 
@@ -110,10 +114,229 @@ int benchMatmul(int threads) {
             std::printf("%-22s %s: %7.3f ms  %5.2f GB/s\n", s.name, weightFormatName(f), ms, q.bytes() / ms / 1e6);
         }
     }
+    // Many-row GEMMs (prefill, speech frames): FLOP rate.
+    for (Shape s : {Shape{"ff-in 4096x1024", 4096, 1024}, Shape{"ff-out 1024x4096", 1024, 4096}}) {
+        for (int T : {64, 156, 624}) {
+            std::vector<float> x(size_t(T) * size_t(s.K)), y(size_t(T) * size_t(s.N));
+            for (auto& v : x) v = nd(rng);
+            QMatrix q = quantizeMatrix(WeightFormat::F16, s.N, s.K, [&](int, float* out) {
+                for (int k = 0; k < s.K; k++) out[k] = nd(rng);
+            }, nullptr);
+            cpu::matmul(pool, x.data(), T, s.K, q, nullptr, y.data(), s.N, 0);
+            auto t0 = std::chrono::steady_clock::now();
+            for (int i = 0; i < 5; i++) cpu::matmul(pool, x.data(), T, s.K, q, nullptr, y.data(), s.N, 0);
+            double ms = msSince(t0) / 5;
+            std::printf("%-22s T=%-4d FP16: %8.2f ms  %6.2f GFLOP/s\n", s.name, T, ms, 2.0 * T * s.N * s.K / ms / 1e6);
+        }
+    }
     return 0;
 }
 
+void writeWav(const std::string& path, const std::vector<float>& pcm, int rate) {
+    std::ofstream f(path, std::ios::binary);
+    auto u32 = [&](uint32_t v) { f.write(reinterpret_cast<const char*>(&v), 4); };
+    auto u16 = [&](uint16_t v) { f.write(reinterpret_cast<const char*>(&v), 2); };
+    const uint32_t bytes = uint32_t(pcm.size() * 2);
+    f.write("RIFF", 4);
+    u32(36 + bytes);
+    f.write("WAVEfmt ", 8);
+    u32(16);
+    u16(1);
+    u16(1);
+    u32(uint32_t(rate));
+    u32(uint32_t(rate * 2));
+    u16(2);
+    u16(16);
+    f.write("data", 4);
+    u32(bytes);
+    for (float s : pcm) {
+        int16_t v = int16_t(std::max(-1.0f, std::min(1.0f, s)) * 32767.0f);
+        f.write(reinterpret_cast<const char*>(&v), 2);
+    }
+}
+
+std::vector<float> readF32(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    std::vector<float> v;
+    float x;
+    while (f.read(reinterpret_cast<char*>(&x), 4)) v.push_back(x);
+    return v;
+}
+
+// nekochat_cli <kokoroDir> --tts [--text T | --phonemes P] [--voice file.pt] [--lexicon DIR] [--speed S]
+//              [--out file.wav] [--no-noise] [--ref kokoro-ref-dir] [--weights ...] [--threads N]
+int runTts(const std::string& dir, const LoadOptions& opt, const std::string& text, std::string phonemes,
+           std::string voicePath, const std::string& lexicon, float speed, const std::string& outPath, bool noise,
+           const std::string& refDir) {
+    auto t0 = std::chrono::steady_clock::now();
+    KokoroModel model(dir, opt, [](float f, const std::string& s) {
+        std::fprintf(stderr, "\r[%3d%%] %-40s", int(f * 100), s.c_str());
+    });
+    std::fprintf(stderr, "\nloaded in %.0f ms, %s weights %.1f MB, %d threads\n", msSince(t0),
+                 model.weightsLabel().c_str(), model.weightBytes() / 1048576.0, model.threads());
+    if (!refDir.empty()) phonemes = Json::parseFile(refDir + "/ref.json")["phonemes"].str();
+    if (phonemes.empty()) {
+        auto tg = std::chrono::steady_clock::now();
+        KokoroG2P g2p(lexicon + "/us_gold.json", lexicon + "/us_silver.json", false);
+        double loadG2p = msSince(tg);
+        tg = std::chrono::steady_clock::now();
+        phonemes = g2p.phonemize(text);
+        std::printf("lexicon loaded in %.0f ms, phonemized in %.1f ms\n", loadG2p, msSince(tg));
+    }
+    std::printf("phonemes: %s\n", phonemes.c_str());
+    std::vector<int> ids;
+    for (char32_t c : utf8To32(phonemes)) {
+        int id = model.phonemeId(utf32To8(std::u32string(1, c)));
+        if (id >= 0) ids.push_back(id);
+    }
+    if (voicePath.empty()) voicePath = dir + "/voices/af_heart.pt";
+    KokoroVoice voice(voicePath);
+    const int nPh = int(utf8To32(phonemes).size());  // the pipeline indexes the pack by phoneme string length
+    KokoroModel::Debug dbg;
+    std::vector<float> refF0;
+    std::vector<int> refDur;
+    if (!refDir.empty()) {  // same durations and F0 as the reference, so the vocoder can be compared sample by sample
+        refF0 = readF32(refDir + "/F0.bin");
+        dbg.forceF0 = &refF0;
+        const Json refJson = Json::parseFile(refDir + "/ref.json");  // named: a temporary would dangle in the loop
+        for (auto& v : refJson["pred_dur"].items()) refDur.push_back(int(v.i64()));
+        if (std::getenv("NEKO_FORCE_DUR")) dbg.forceDurations = &refDur;
+    }
+    auto t1 = std::chrono::steady_clock::now();
+    std::vector<float> pcm = model.synthesize(ids, voice.style(nPh), speed, 1234, noise, &dbg);
+    const double ms = msSince(t1), seconds = double(pcm.size()) / KokoroModel::kSampleRate;
+    std::printf("%zu tokens -> %d frames -> %zu samples (%.2f s of audio) in %.0f ms: %.2fx real time\n", ids.size() + 2,
+                int(dbg.f0.size() / 2), pcm.size(), seconds, ms, seconds * 1000.0 / ms);
+    std::printf("stages: albert %.0f ms, prosody %.0f ms, decoder %.0f ms, generator %.0f ms\n", dbg.msAlbert,
+                dbg.msProsody, dbg.msDecoder, dbg.msGenerator);
+    int failures = 0;
+    if (!refDir.empty()) {
+        Json ref = Json::parseFile(refDir + "/ref.json");
+        std::vector<int> expect;
+        for (auto& v : ref["pred_dur"].items()) expect.push_back(int(v.i64()));
+        int durDiff = 0;
+        for (size_t i = 0; i < std::min(expect.size(), dbg.durations.size()); i++) durDiff += dbg.durations[i] != expect[i];
+        const bool durOk = expect.size() == dbg.durations.size() && durDiff == 0;
+        failures += !durOk;
+        std::printf("durations: %s (%d of %zu differ)\n", durOk ? "PASS" : "FAIL", durDiff, expect.size());
+        auto compare = [&](const char* name, const std::vector<float>& got, double minSnr) {
+            std::vector<float> want = readF32(refDir + "/" + name + ".bin");
+            if (want.size() != got.size()) {
+                std::printf("%s: FAIL (length %zu vs %zu)\n", name, got.size(), want.size());
+                failures++;
+                return;
+            }
+            double sig = 0, err = 0, maxAbs = 0;
+            for (size_t i = 0; i < got.size(); i++) {
+                const double d = double(got[i]) - want[i];
+                sig += double(want[i]) * want[i];
+                err += d * d;
+                maxAbs = std::max(maxAbs, std::fabs(d));
+            }
+            const double snr = 10 * std::log10(sig / std::max(err, 1e-30));
+            const bool ok = snr >= minSnr;
+            failures += !ok;
+            std::printf("%s: %s (SNR %.1f dB, max |diff| %.3g)\n", name, ok ? "PASS" : "FAIL", snr, maxAbs);
+        };
+        if (durOk) {
+            compare("F0", dbg.f0, 40.0);
+            compare("N", dbg.n, 40.0);
+            compare("gen_in", dbg.genIn, 40.0);
+            compare("har_source", dbg.harSource, 30.0);
+            compare("post", dbg.post, 30.0);
+            compare("audio", pcm, 20.0);
+        }
+    }
+    if (!outPath.empty()) {
+        writeWav(outPath, pcm, KokoroModel::kSampleRate);
+        std::printf("wrote %s\n", outPath.c_str());
+    }
+    return failures ? 1 : 0;
+}
+
 }  // namespace
+
+// nekochat_cli <speechDir> --asr --audio clip.f32 [--asr-ref refDir --clip clipN] [--weights ...] [--threads N]
+// Transcribes 16 kHz f32 audio. With a reference (speech_ref.py dumps) it compares the features, the hidden states
+// after 1, 2, 8 and 16 blocks, the per-frame argmax ids and the text.
+int runAsr(const std::string& dir, const LoadOptions& opt, const std::string& audioPath, const std::string& refDir,
+           const std::string& clip) {
+    auto t0 = std::chrono::steady_clock::now();
+    GraniteSpeechModel model(dir, opt, [](float f, const std::string& s) {
+        std::fprintf(stderr, "\r[%3d%%] %-40s", int(f * 100), s.c_str());
+    });
+    std::fprintf(stderr, "\nloaded in %.0f ms, %s weights %.1f MB\n", msSince(t0), model.weightsLabel().c_str(),
+                 model.weightBytes() / 1048576.0);
+    const std::vector<float> pcm = readF32(audioPath);
+    GraniteSpeechModel::Debug dbg;
+    const std::string text = model.transcribe(pcm.data(), pcm.size(), &dbg);
+    const double seconds = double(pcm.size()) / GraniteSpeechModel::kSampleRate;
+    std::printf("\"%s\"\n", text.c_str());
+    std::printf("audio %.2f s: front end %.0f ms, encoder %.0f ms, real-time factor %.3f\n", seconds, dbg.msFrontEnd,
+                dbg.msEncoder, (dbg.msFrontEnd + dbg.msEncoder) / 1000.0 / seconds);
+    std::printf("encoder: matmul %.0f ms, attention %.0f ms, depthwise conv %.0f ms, rest %.0f ms\n", dbg.msMatmul,
+                dbg.msAttention, dbg.msDepthwise, dbg.msEncoder - dbg.msMatmul - dbg.msAttention - dbg.msDepthwise);
+    if (refDir.empty()) return 0;
+    int failures = 0;
+    auto maxDiff = [](const std::vector<float>& a, const std::vector<float>& b, double& rel) {
+        double m = 0, ref = 0;
+        for (size_t i = 0; i < std::min(a.size(), b.size()); i++) {
+            m = std::max(m, double(std::fabs(a[i] - b[i])));
+            ref = std::max(ref, double(std::fabs(b[i])));
+        }
+        rel = ref > 0 ? m / ref : m;
+        return m;
+    };
+    double rel = 0;
+    const std::vector<float> wantFeat = readF32(refDir + "/" + clip + ".features.f32");
+    const double fd = maxDiff(dbg.features, wantFeat, rel);
+    const bool featOk = dbg.features.size() == wantFeat.size() && fd < 1e-3;
+    failures += !featOk;
+    std::printf("features %-4s %zu vs %zu values, max |diff| %.2e\n", featOk ? "PASS" : "FAIL", dbg.features.size(),
+                wantFeat.size(), fd);
+    for (int n : {1, 2, 8, 16}) {
+        GraniteSpeechModel::Debug d;
+        d.debugLayers = n;
+        model.transcribe(pcm.data(), pcm.size(), &d);
+        const std::vector<float> want = readF32(refDir + "/" + clip + ".hidden" + std::to_string(n) + ".f32");
+        const double hd = maxDiff(d.hidden, want, rel);
+        std::printf("hidden after %2d blocks: %zu vs %zu values, max |diff| %.3g (%.2e of max |ref|)\n", n,
+                    d.hidden.size(), want.size(), hd, rel);
+        failures += d.hidden.size() != want.size();
+    }
+    const Json ref = Json::parseFile(refDir + "/ref.json");
+    for (auto& c : ref.items()) {
+        if (c["clip"].str() != clip) continue;
+        std::vector<int> want;
+        for (auto& v : c["frame_ids"].items()) want.push_back(int(v.i64()));
+        int agree = 0;
+        for (size_t i = 0; i < std::min(want.size(), dbg.frameIds.size()); i++) agree += want[i] == dbg.frameIds[i];
+        const bool textOk = text == c["text"].str();
+        failures += !textOk;
+        std::printf("frame ids: %d of %zu agree (%zu frames here)\n", agree, want.size(), dbg.frameIds.size());
+        std::printf("text %-4s want \"%s\"\n", textOk ? "PASS" : "FAIL", c["text"].str().c_str());
+    }
+    std::printf("reference checks: %s (%d failures)\n", failures ? "FAILED" : "ALL PASS", failures);
+    return failures ? 1 : 0;
+}
+
+// nekochat_cli <speechDir> --asr-decode cases.json: decodes {"ids": [...], "text": "..."} with the speech
+// vocabulary alone (no weights needed) and compares with the transformers tokenizer's text.
+int runAsrDecode(const std::string& dir, const std::string& casesPath) {
+    GraniteSpeechTokenizer tok;
+    tok.load(dir, int(Json::parseFile(dir + "/config.json").getInt("vocab_size", 16384)));
+    const Json c = Json::parseFile(casesPath);
+    std::vector<int> ids;
+    for (auto& v : c["ids"].items()) ids.push_back(int(v.i64()));
+    // transformers prints the added placeholder tokens (<|tok0|>..) literally; NekoChat drops them (no text).
+    std::string want = c["text"].str();
+    int placeholders = 0;
+    for (size_t p; (p = want.find("<|tok")) != std::string::npos; placeholders++) want.erase(p, want.find("|>", p) + 2 - p);
+    const std::string got = tok.decode(ids);
+    std::printf("decode %s (%d placeholder tokens dropped)\n  got  \"%s\"\n  want \"%s\"\n", got == want ? "PASS" : "FAIL",
+                placeholders, got.c_str(), want.c_str());
+    return got == want ? 0 : 1;
+}
 
 int main(int argc, char** argv) {
     if (argc < 2) {
@@ -127,7 +350,10 @@ int main(int argc, char** argv) {
     LoadOptions opt;
     int n = 32;
     float temp = 0.0f;
-    bool bisect = false, quantCheck = false, bench = false;
+    bool bisect = false, quantCheck = false, bench = false, ttsMode = false, noise = true, asrMode = false;
+    std::string audioPath, asrRef, clip = "clip0", asrDecode;
+    std::string ttsText = "Hello! I'm Neko, your pocket cat.", ttsPhonemes, voicePath, lexicon, outPath, ttsRef;
+    float speed = 1.0f;
     for (int i = 2; i < argc; i++) {
         std::string a = argv[i];
         auto next = [&]() { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
@@ -147,9 +373,26 @@ int main(int argc, char** argv) {
         else if (a == "--bisect") bisect = true;
         else if (a == "--check-quant") quantCheck = true;
         else if (a == "--bench") bench = true;
+        else if (a == "--tts") ttsMode = true;
+        else if (a == "--text") ttsText = next();
+        else if (a == "--phonemes") ttsPhonemes = next();
+        else if (a == "--voice") voicePath = next();
+        else if (a == "--lexicon") lexicon = next();
+        else if (a == "--speed") speed = std::stof(next());
+        else if (a == "--out") outPath = next();
+        else if (a == "--no-noise") noise = false;
+        else if (a == "--tts-ref") ttsRef = next();
+        else if (a == "--asr") asrMode = true;
+        else if (a == "--audio") audioPath = next();
+        else if (a == "--asr-ref") asrRef = next();
+        else if (a == "--clip") clip = next();
+        else if (a == "--asr-decode") asrDecode = next();
     }
 
     try {
+        if (!asrDecode.empty()) return runAsrDecode(dir, asrDecode);
+        if (asrMode) return runAsr(dir, opt, audioPath, asrRef, clip);
+        if (ttsMode) return runTts(dir, opt, ttsText, ttsPhonemes, voicePath, lexicon, speed, outPath, noise, ttsRef);
         if (quantCheck) return checkQuant();
         if (bench) return benchMatmul(opt.threads);
         auto quiet = [](float, const std::string&) {};
@@ -157,7 +400,7 @@ int main(int argc, char** argv) {
             // Runs the CPU and the selected GPU backend layer by layer and reports where they diverge.
             std::string type = readModelType(dir);
             BpeTokenizer tk;
-            tk.load(dir, type == "qwen3" ? PreTokenizer::Qwen2 : PreTokenizer::Gpt2);
+            tk.load(dir, preTokenizerFor(type));
             auto ids = tk.encode(prompt);
             LoadOptions cpuOpt = opt;
             cpuOpt.backend = BackendPref::CPU;
@@ -197,7 +440,7 @@ int main(int argc, char** argv) {
         if (!klFile.empty()) {
             std::string type = readModelType(dir);
             BpeTokenizer tk;
-            tk.load(dir, type == "qwen3" ? PreTokenizer::Qwen2 : PreTokenizer::Gpt2);
+            tk.load(dir, preTokenizerFor(type));
             std::ifstream f(klFile, std::ios::binary);
             std::stringstream ss;
             ss << f.rdbuf();
@@ -288,6 +531,15 @@ int main(int argc, char** argv) {
                 std::printf("   prefill %d tok %.1f ms, decode %d tok %.1f ms (%.2f tok/s)\n", st.promptTokens,
                             st.prefillMs, st.generatedTokens, st.decodeMs,
                             st.generatedTokens > 1 ? 1000.0 * (st.generatedTokens - 1) / st.decodeMs : 0.0);
+                // Same prompt again on the warm cache, as a redo does (recurrent models resume at a restore point).
+                std::string again;
+                auto st2 = engine.generate(ids, int(g["out"].size()), greedy, [&](const std::string& s) {
+                    again += s;
+                    return true;
+                });
+                std::printf("   redo     %-4s reused %d of %d prompt tokens\n", again == text ? "PASS" : "FAIL",
+                            st2.reusedTokens, st2.promptTokens);
+                if (again != text) failures++;
             }
         }
 

@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.sp
 import app.auriel.realm.nekochat.R
 import com.nekochat.ui.theme.GlassLevel
 import com.nekochat.ui.theme.Neko
+import com.nekochat.ui.theme.Spectral
 import com.nekochat.ui.theme.NekoRadius
 import com.nekochat.ui.theme.glass
 
@@ -93,7 +94,7 @@ fun GlassTopBar(
             Spacer(Modifier.width(14.dp))
         }
         Column(Modifier.weight(1f).padding(end = 4.dp)) {
-            Text(title, color = Neko.Text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+            Text(title, color = Neko.Text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, fontFamily = Spectral, maxLines = 1,
                 overflow = TextOverflow.Ellipsis)
             if (!subtitle.isNullOrEmpty()) {
                 Text(subtitle, color = Neko.TextSecondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -221,7 +222,7 @@ fun ConfirmDialog(
         containerColor = Neko.SurfaceElevated,
         shape = RoundedCornerShape(NekoRadius.XLarge),
         icon = { Icon(Icons.Rounded.Delete, contentDescription = null, tint = Neko.Error) },
-        title = { Text(title, color = Neko.Text, fontSize = 19.sp, fontWeight = FontWeight.SemiBold) },
+        title = { Text(title, color = Neko.Text, fontSize = 19.sp, fontWeight = FontWeight.SemiBold, fontFamily = Spectral) },
         text = { Text(message, color = Neko.TextSecondary, fontSize = 14.sp, lineHeight = 20.sp) },
         dismissButton = {
             TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) {
@@ -251,7 +252,7 @@ fun SettingsGroup(title: String, content: @Composable () -> Unit) {
             .glass()
             .padding(horizontal = 18.dp, vertical = 16.dp),
     ) {
-        Text(title, color = Neko.Text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        Text(title, color = Neko.Text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, fontFamily = Spectral)
         Spacer(Modifier.height(8.dp))
         content()
     }
@@ -283,7 +284,7 @@ fun glassFieldColors() = OutlinedTextFieldDefaults.colors(
     unfocusedTextColor = Neko.Text,
     disabledTextColor = Neko.TextMuted,
     focusedBorderColor = Neko.Accent,
-    unfocusedBorderColor = Neko.Border,
+    unfocusedBorderColor = Neko.Control,
     focusedContainerColor = Neko.BackgroundDeep.copy(alpha = 0.5f),
     unfocusedContainerColor = Neko.BackgroundDeep.copy(alpha = 0.35f),
     focusedLabelColor = Neko.Accent,

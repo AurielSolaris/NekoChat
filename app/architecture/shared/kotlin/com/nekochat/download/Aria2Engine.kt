@@ -12,6 +12,14 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
+private fun aria2Binary(context: Context) = File(context.applicationInfo.nativeLibraryDir, "libaria2c.so")
+
+/**
+ * False in builds without libaria2c.so (tools/build-aria2.sh produces it; a from-source build may skip it).
+ * Downloads then use Fetch, and Settings offers only Fetch.
+ */
+fun aria2Available(context: Context): Boolean = aria2Binary(context).exists()
+
 /**
  * aria2c (shipped as libaria2c.so) as a [TransferEngine]: several connections per file and
  * resumable transfers via .aria2 control files. One aria2 process serves every download; the
@@ -143,7 +151,7 @@ internal class Aria2Daemon private constructor(private val process: Process, val
 
     companion object {
         fun start(context: Context, defaultDir: File, dns: DnsMode): Aria2Daemon {
-            val bin = File(context.applicationInfo.nativeLibraryDir, "libaria2c.so")
+            val bin = aria2Binary(context)
             if (!bin.exists()) throw DownloadException("The aria2 downloader isn't available on this device. Try Fetch.")
             val home = File(context.filesDir, "aria2").apply { mkdirs() }
             val port = ServerSocket(0).use { it.localPort }

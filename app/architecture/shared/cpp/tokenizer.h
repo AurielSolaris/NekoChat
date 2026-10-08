@@ -1,4 +1,5 @@
-// Byte-level BPE tokenizer (vocab.json + merges.txt, or HF tokenizer.json) for GPT-2 and Qwen2/Qwen3 vocabularies.
+// Byte-level BPE tokenizer (vocab.json + merges.txt, or HF tokenizer.json) for GPT-2, Qwen2/Qwen3 and cl100k-style
+// (Granite 4) vocabularies.
 #pragma once
 
 #include <string>
@@ -7,8 +8,16 @@
 
 namespace neko {
 
-// The regex that splits text into words before BPE; it is the only difference between the two families.
-enum class PreTokenizer { Gpt2, Qwen2 };
+// The regex that splits text into words before BPE; it is the only difference between the families.
+// Cl100k is Qwen2's pattern with digits grouped up to three (\p{N}{1,3}).
+enum class PreTokenizer { Gpt2, Qwen2, Cl100k };
+
+// The pre-tokenizer a config.json model_type uses.
+inline PreTokenizer preTokenizerFor(const std::string& modelType) {
+    if (modelType == "qwen3") return PreTokenizer::Qwen2;
+    if (modelType == "granitemoehybrid") return PreTokenizer::Cl100k;
+    return PreTokenizer::Gpt2;
+}
 
 class BpeTokenizer {
 public:

@@ -1,0 +1,8 @@
+- IBM Granite 4.0-H (350M, 1B) runs on the phone, with one-tap downloads
+- Voice input: tap the mic and talk; Granite Speech transcribes on the phone
+- Redo a reply or edit your message
+- Read aloud and narration with on-device Kokoro-82M or the phone's voice
+- ReALM v0.1.0 support
+- New Gothic Pink theme, built to WCAG 2.2 AA contrast
+- Open Sans and Spectral fonts, and a greeting that follows the time of day
+- Faster prompts; works without aria2; all library licenses on the About page

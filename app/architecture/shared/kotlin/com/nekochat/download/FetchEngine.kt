@@ -29,6 +29,7 @@ internal class FetchEngine : TransferEngine {
 
     override fun add(url: String, dir: File, name: String, size: Long, connections: Int): String {
         val job = Job(url, File(dir, name), size)
+        job.file.parentFile?.mkdirs()  // repository subfolders, e.g. voices/af_heart.pt
         val handle = "fetch:${ids.incrementAndGet()}"
         jobs[handle] = job
         run(job)

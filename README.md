@@ -7,7 +7,7 @@
 
 <p align="center">
   <b>Private, on-device AI chat for Android.</b><br>
-  GPT-2 and Qwen3 models from <code>.safetensors</code> or <code>.pt</code>, on a custom C++ engine running on Vulkan, OpenGL ES or the CPU.
+  GPT-2, Qwen3 and Granite 4.0-H models from <code>.safetensors</code> or <code>.pt</code>, on a custom C++ engine running on Vulkan, OpenGL ES or the CPU.
 </p>
 
 <p align="center">
@@ -32,9 +32,26 @@
   </tr>
   <tr>
     <td align="center"><img src="docs/screenshots/11-precision-theme.png" alt="Weight precision chips" width="200"><br><sub><b>Weight precision</b>: FP16 / FP8 / FP4</sub></td>
-    <td align="center"><img src="docs/screenshots/12-themes.png" alt="Theme page with Rose and Ocean" width="200"><br><sub><b>Themes</b>: Rose and Ocean</sub></td>
-    <td align="center" width="200"><sub>Screenshots: Samsung Galaxy M31 (Exynos 9611, Mali-G72), release build, Qwen3-0.6B loaded
-      from a folder picked with the system picker.</sub></td>
+    <td align="center"><img src="docs/screenshots/12-themes.png" alt="Theme page with Rose, Ocean and Gothic Pink" width="200"><br><sub><b>Themes</b>: Rose, Ocean, Gothic Pink</sub></td>
+    <td align="center"><img src="docs/screenshots/13-accessibility.png" alt="Accessibility page with read aloud and Kokoro voices" width="200"><br><sub><b>Accessibility</b>: read aloud, Kokoro</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/15-gothic-pink.png" alt="Chats screen in Gothic Pink with a good-afternoon greeting" width="200"><br><sub><b>Gothic Pink</b>: greeting by time of day</sub></td>
+    <td align="center"><img src="docs/screenshots/16-gothic-chat.png" alt="Chat with Granite 4.0-H 350M in Gothic Pink" width="200"><br><sub><b>Granite 4.0-H</b>: 350M on the CPU</sub></td>
+    <td align="center"><img src="docs/screenshots/17-gothic-settings.png" alt="Settings in Gothic Pink with Granite's memory use" width="200"><br><sub><b>Settings</b>: Granite, FP8, 370 MB</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/18-add-models.png" alt="Download models with Granite 4.0-H suggestions" width="200"><br><sub><b>Download models</b>: Granite 350M / 1B</sub></td>
+    <td align="center"><img src="docs/screenshots/19-gothic-accessibility.png" alt="Accessibility page in Gothic Pink" width="200"><br><sub><b>Accessibility</b>: in Gothic Pink</sub></td>
+    <td align="center"><img src="docs/screenshots/20-gothic-about.png" alt="About page in Gothic Pink, version 0.2.0" width="200"><br><sub><b>About</b>: 0.2.0, licenses</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/21-voice-input.png" alt="Chat input bar recording voice input" width="200"><br><sub><b>Voice input</b>: tap the mic, talk</sub></td>
+    <td align="center"><img src="docs/screenshots/22-voice-input-settings.png" alt="Voice input settings with the Granite Speech models" width="200"><br><sub><b>Voice input settings</b>: Granite Speech</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="200"><sub>Screenshots: Samsung Galaxy M31 (Exynos 9611, Mali-G72), release build, Qwen3-0.6B or
+      Granite 4.0-H 350M loaded from a folder picked with the system picker.</sub></td>
   </tr>
 </table>
 
@@ -45,7 +62,8 @@ framework dependencies. It uses Vulkan, OpenGL ES or the CPU, whichever the devi
 - **Android:** minSdk 21 (Android 5.0, the lowest Jetpack Compose supports), target/compile SDK 36 (Android 16)
 - **ABI:** arm64-v8a
 - **Supported architectures:** GPT-2 (`model_type: gpt2`, all sizes and fine-tunes) and Qwen3 dense
-  models (`model_type: qwen3`, e.g. Qwen3-0.6B / 1.7B / 4B)
+  models (`model_type: qwen3`, e.g. Qwen3-0.6B / 1.7B / 4B) and IBM Granite 4.0-H dense hybrids
+  (`model_type: granitemoehybrid` without experts: granite-4.0-h-350m, granite-4.0-h-1b; CPU only)
 - **License:** [GPL-3.0](LICENSE)
 - **Branding & UI rules:** [`app/branding/BRANDING+UI.md`](app/branding/BRANDING+UI.md)
 
@@ -56,8 +74,9 @@ framework dependencies. It uses Vulkan, OpenGL ES or the CPU, whichever the devi
   also links to the **About** page.
 - **Models folder chosen with the system folder picker.** NekoChat keeps read access to that one
   folder and rescans it every 3 s, so new model subfolders appear on their own.
-- **Model downloads from Hugging Face** (*Settings → Download models*): one-tap Qwen3-0.6B and
-  GPT-2, or any `owner/model` repo. Only GPT-2 and Qwen3 models are accepted: the repo's
+- **Model downloads from Hugging Face** (*Settings → Download models*): one-tap Qwen3-0.6B,
+  Granite 4.0-H 350M / 1B and GPT-2, or any `owner/model` repo. Only GPT-2, Qwen3 and Granite 4.0-H
+  models are accepted: the repo's
   `config.json` is checked before anything is downloaded. Choose the downloader in Settings:
   **aria2 (multi-thread)**, **aria2 (single-thread)** or **Fetch (single-thread)**. All of them
   resume where they stopped and show a progress notification.
@@ -74,7 +93,24 @@ framework dependencies. It uses Vulkan, OpenGL ES or the CPU, whichever the devi
   FP8 halves the memory with nearly identical answers; FP4 quarters it and is the fastest on the CPU.
 - **Memory indicator:** Settings shows what the model occupies (weights, chat memory, buffers,
   whole app); the chat header shows backend, precision, speed and memory.
-- **Themes:** NekoChat **Rose** (default) and NekoChat **Ocean** (Solarized Dark with pastel blues).
+- **Themes:** NekoChat **Rose** (default), NekoChat **Ocean** (Solarized Dark with pastel blues) and
+  NekoChat **Gothic Pink** (near-black plum with soft pink; WCAG 2.2 AA on every surface: text
+  >= 4.6:1, control outlines >= 3.1:1).
+- **Fonts:** Open Sans for text, Spectral for headings. The Chats screen greets you by time of day.
+- **Read aloud and narration** (*Settings → Accessibility*): replies read aloud, screens and actions
+  narrated. Voices come from **Kokoro-82M** running on the phone's CPU (downloaded on request,
+  about 340 MB, 28 English voices, FP16/FP8/FP4) or from the phone's own text-to-speech; de-Googled
+  phones without a TTS engine use Kokoro.
+- **Voice input:** tap the mic in a chat, talk, tap again: **Granite Speech 5.0 TurboCTC** (IBM,
+  470M, English) turns it into text on the phone's CPU and the recording never leaves it. Two
+  models: Granite Speech NC (default, most accurate, CC BY-NC-SA 4.0: personal, non-commercial use)
+  and Granite Speech (Apache 2.0). Downloaded on request (950 MB) from *Settings → Accessibility*
+  or when the mic is first tapped; FP16/FP8/FP4. The model loads on the first tap and leaves memory
+  two minutes after the last dictation.
+- **Redo and edit:** redo the last reply, or edit one of your messages and resend (later messages
+  are replaced). Both reuse the KV cache up to the first changed token.
+- **ReALM v0.1.0** checkpoints (a `realm.json` marker next to a GPT-2 checkpoint) get ReALM's own
+  chat format, 512-token window and sampling defaults; see *Chat formats*.
 - **KV-cache prefix reuse** across turns: only new tokens are processed.
 - **Glass UI** with the maneki-neko mascot, built to stay cheap (see *Rendering*).
 
@@ -121,7 +157,9 @@ engine-owned buffers while loading, so the descriptors are closed as soon as the
 | Architecture | Prompt | Reply ends at |
 |--------------|--------|---------------|
 | GPT-2 (base model) | Transcript: persona line, then `Name: …` / `Neko: …` turns | first newline or speaker label |
+| ReALM v0.1.0 (GPT-2 + `realm.json`, `realm-v1`) | ReALM's training format: `\nuser: …\nassistant:` per turn, no preamble, no BOS/EOS; newest 512 tokens kept | `\nuser:` or a blank line (replies may span lines) |
 | Qwen3 | ChatML (`<\|im_start\|>system/user/assistant`) with thinking disabled: the reply starts after an empty `<think></think>` block, as `apply_chat_template(enable_thinking=False)` renders it | `<\|im_end\|>` token |
+| Granite 4.0-H | Granite 4.0's template (`<\|start_of_role\|>role<\|end_of_role\|>text<\|end_of_text\|>`) with Neko's persona as the system message, no tools or documents | `<\|end_of_text\|>` token |
 
 Typed text can't inject control tokens: `<|` in user text is split before tokenizing.
 
@@ -143,7 +181,7 @@ are moved by a `TransferEngine`:
 Partial files are engine-specific, so every download remembers the engine it started with and is
 always resumed by it; the setting applies to new downloads.
 
-`Aria2Engine` ships the official aria2 1.37.0 Android build as `jniLibs/arm64-v8a/libaria2c.so`
+`Aria2Engine` runs aria2 1.37.0, shipped as `jniLibs/arm64-v8a/libaria2c.so`
 (only the native library directory is executable on Android 10+; `useLegacyPackaging` extracts
 it) and runs it as a child process with JSON-RPC on `127.0.0.1`, a random port and a random
 secret, and a CA bundle assembled from Android's trusted roots, so HTTPS certificates are
@@ -194,9 +232,17 @@ app/
 │   ├── gpt2/
 │   │   ├── cpp/gpt2_model.*     GPT-2 forward pass (CPU + GPU graphs)
 │   │   └── kotlin/              Gpt2ChatFormat (transcript prompt, stop sequences)
-│   └── qwen3/
-│       ├── cpp/qwen3_model.*    Qwen3 forward pass (RMSNorm, GQA + q/k norm, RoPE, SwiGLU)
-│       └── kotlin/              Qwen3ChatFormat (ChatML, no-think)
+│   ├── qwen3/
+│   │   ├── cpp/qwen3_model.*    Qwen3 forward pass (RMSNorm, GQA + q/k norm, RoPE, SwiGLU)
+│   │   └── kotlin/              Qwen3ChatFormat (ChatML, no-think)
+│   └── granite/
+│       ├── cpp/granite_model.*  Granite 4.0-H forward pass (Mamba2 + NoPE GQA hybrid, SwiGLU, muP
+│       │                        multipliers; recurrent state with restore points)
+│       └── kotlin/              GraniteChatFormat (role tags)
+├── architecture/granite_speech/
+│   └── cpp/granite_speech_model.*  Granite Speech 5 CTC: log-mel + delta front end, conformer
+│                                   (block attention with Shaw positions, stride-2 subsampling,
+│                                   self-conditioning), greedy CTC; both tokenizers
 ├── schemas/                     Room schema history (commit it)
 └── src/main/                    manifest, resources, jniLibs (aria2c), assets/licenses
 ```
@@ -244,6 +290,13 @@ limits.
 |-------|---------------|---------------|
 | GPT-2 | 1024 (trained length) | 1024 |
 | Qwen3 | 8192 (KV cache committed as it fills) | 4096 |
+| Granite 4.0-H | 16384 (only the attention layers keep a KV cache) | - (CPU only) |
+
+Granite's Mamba layers carry a recurrent state instead of a per-position cache, so it can't be
+rewound to an arbitrary token. The engine ends a prefill batch one token before the end of each
+prompt and the model saves its state there (two restore points, f32: 23 MB each for 350M, 58 MB
+for 1B). Redo resumes from the newest point; editing the last message resumes from the one before.
+Continuing a chat needs no restore at all.
 
 The GPU self-test runs every kernel (including a chained layernorm → matmul submission and
 attention past 1024 keys) against the CPU before a backend is trusted, so driver bugs fall back to
@@ -269,6 +322,25 @@ Requirements: Android SDK 36, NDK 28.2.13676358, CMake 3.22.1, JDK 17+.
 ./gradlew assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
+
+### aria2 from source
+
+`libaria2c.so` is the APK's only prebuilt binary, and it can be rebuilt from pinned, checksummed
+sources (aria2, OpenSSL 3.5 LTS, zlib, expat, c-ares, libssh2) for the app's minSdk:
+
+```sh
+tools/build-aria2.sh        # needs a Linux host (WSL is fine); downloads its own NDK into ~/nekochat-aria2
+```
+
+It replaces `app/src/main/jniLibs/arm64-v8a/libaria2c.so` and refreshes the libraries' license
+texts in `app/src/main/assets/licenses/`. NekoChat builds and runs without the binary: Settings
+then offers only the Fetch downloader.
+
+### F-Droid
+
+The store listing (title, descriptions, icon, screenshots, per-version changelogs) lives in
+`fastlane/metadata/android/en-US/`. The APK carries no Google dependency-metadata block, and a
+recipe can delete the committed `libaria2c.so` and rebuild it with `tools/build-aria2.sh`.
 
 ### Signing release builds
 
@@ -335,10 +407,30 @@ Samsung Galaxy M31 (Exynos 9611: 4× A73 + 4× A53, Mali-G72 MP3), f16 weights, 
 | Qwen3-0.6B | CPU (NEON, 4 big cores) | ~6.1 tok/s | ✅ exact |
 | Qwen3-0.6B | Vulkan | ~5.0 tok/s | ✅ exact |
 | Qwen3-0.6B | OpenGL ES 3.1 | ~4.7 tok/s | ✅ exact |
+| Granite 4.0-H 350M | CPU (NEON, 4 big cores) | ~11 tok/s | ✅ exact |
+| Granite 4.0-H 1B | CPU (NEON, 4 big cores) | ~2.7 tok/s | ✅ exact |
+
+Voice input, Granite Speech 5.0 TurboCTC NC against transformers (fp32) on LibriSpeech clips:
+identical log-mel features (max difference 1.6e-5), hidden states within 7e-5 of the reference's
+range after every checked block, identical per-frame CTC ids and transcripts (FP16 and FP8; FP4
+flips about 1% of frames, same text). The encoder runs at about 0.7x real time on 4x A73 (12.5 s of
+speech in 8.7 s). Both tokenizers (SentencePiece pieces for -nc, byte-level BPE for Apache) decode
+exactly as the `tokenizers` library does.
+
+Prompts and speech frames (16 rows or more) use a GEMM kernel: weight panels are dequantized to f32
+once per call and K is walked in cache-sized slices, 25-29 GFLOP/s on the A73 cores (the per-row
+kernels manage 8-24). Chat prefill gets faster too; every chat model still matches its reference.
 
 "Exact" means identical tokenizer ids and identical greedy continuations, including Qwen3's chat
 template ("What is the capital of France?" → "The capital of France is **Paris**."). Decode is
 memory-bandwidth bound; on this SoC the big CPU cores beat the small Mali GPU.
+
+For Granite the tokenizer reference is `tokenizer.json` (the `tokenizers` library): transformers 5
+rebuilds Granite's tokenizer from vocab.json/merges.txt with GPT-2's pre-tokenizer, which splits
+digits and newlines differently from the cl100k pattern Granite ships.
+
+Weight precision, Granite 4.0-H 350M (CPU; 160 tokens vs FP16): FP16 650 MB, perplexity 16.56;
+FP8 346 MB, 16.98, KL 0.024, top-1 89%; FP4 184 MB, 23.98, KL 0.43, top-1 68%.
 
 Weight precision, Qwen3-0.6B on the same phone (CPU; quality over 160 tokens vs FP16):
 
@@ -355,6 +447,9 @@ the quantized GPU kernels are ALU-bound too (Vulkan/GL 4.0–4.8 tok/s for every
 ## Known limitations
 
 - Qwen3 thinking mode is always off (replies start after an empty `<think></think>`).
+- Voice input is English only and runs on the CPU (no GPU kernels for the conformer yet).
+- Granite 4.0-H runs on the CPU only (no GPU kernels for the Mamba layers yet); Granite MoE models
+  (4.0-H Tiny/Small) and the non-hybrid Granite 4.0 models aren't supported.
 - The Qwen tokenizer's NFC normalization isn't applied (typed text is almost always NFC already).
 - Downloads need network access for NekoChat. Some ROMs switch it off for new apps; NekoChat
   detects this and links to *App info → Mobile data & Wi-Fi → Allow network access*.
@@ -373,14 +468,41 @@ the quantized GPU kernels are ALU-bound too (Vulkan/GL 4.0–4.8 tok/s for every
 
 NekoChat is free software under the [GNU General Public License v3](LICENSE).
 
-The APK bundles the official Android build of [aria2](https://aria2.github.io/) 1.37.0
-(GPL-2.0-or-later, statically linked with OpenSSL, zlib, expat, c-ares and libssh2). It runs as a
-separate program; its license texts ship in `app/src/main/assets/licenses/` and are shown on the
-About page.
+Voice input uses IBM's [Granite Speech 5.0 TurboCTC](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc)
+(Apache-2.0) or its [non-commercial sibling](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc-nc)
+(CC BY-NC-SA 4.0, personal and non-commercial use only), downloaded on request, not bundled; the
+app shows each model's license before downloading.
+
+Read-aloud uses [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) by hexgrad (Apache-2.0,
+downloaded on request, not bundled) and bundles the English lexicons of
+[misaki](https://github.com/hexgrad/misaki) (Apache-2.0).
+
+The UI fonts are [Open Sans](https://github.com/googlefonts/opensans) (body) and
+[Spectral](https://github.com/productiontype/Spectral) by Production Type (headings), both under the
+SIL Open Font License 1.1 and bundled in `app/src/main/res/font/`.
+
+The APK bundles [aria2](https://aria2.github.io/) 1.37.0 (GPL-2.0-or-later, statically linked
+with OpenSSL, zlib, expat, c-ares and libssh2; `tools/build-aria2.sh` rebuilds it from source). It
+runs as a separate program; the license texts of aria2 and each of those libraries ship in
+`app/src/main/assets/licenses/` and are shown on the About page.
 
 ## Changelog
 
 Full history: [`changelog.txt`](changelog.txt).
+
+### 0.2.0 (2026-10-08)
+
+- New: **IBM Granite 4.0-H** (350M, 1B) on the CPU, matching transformers exactly; one-tap downloads.
+- New: **voice input** with on-device **Granite Speech 5.0** (CTC, English): tap the mic, talk.
+- New: **Gothic Pink** theme (WCAG 2.2 AA), Open Sans + Spectral fonts, time-of-day greeting.
+- Faster prompts and speech: a GEMM kernel for 16+ rows (2-3x the old prefill throughput).
+
+- New: **ReALM v0.1.0** support: checkpoints with a `realm.json` marker get ReALM's `user:` /
+  `assistant:` format, a 512-token window and ReALM's sampling defaults.
+- New: **redo** the last reply and **edit** your messages; both reuse the KV cache up to the
+  first changed token.
+- New: **read aloud and narration** with on-device **Kokoro-82M** (FP16/FP8/FP4) or the phone's
+  text-to-speech, on a new Accessibility page; voice download offered during setup.
 
 ### 0.1.2 (2026-09-15)
 

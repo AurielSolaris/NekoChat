@@ -41,12 +41,12 @@ std::string jsonEscape(const std::string& s) {
 
 Engine::Engine(const std::string& dir, const LoadOptions& opt, const ProgressFn& progress) {
     std::string type = readModelType(dir);
-    tokenizer_.load(dir, type == "qwen3" ? PreTokenizer::Qwen2 : PreTokenizer::Gpt2);
+    tokenizer_.load(dir, preTokenizerFor(type));
     model_ = loadModel(type, dir, opt, progress);
     const int V = model_->shape().vocab;
     if (tokenizer_.vocabSize() > V + 1) NEKO_LOGW("tokenizer vocab (%d) larger than model vocab (%d)", tokenizer_.vocabSize(), V);
-    // Base models end with <|endoftext|>; chat models end a turn with <|im_end|>.
-    for (const char* s : {"<|endoftext|>", "<|im_end|>"}) {
+    // Base models end with <|endoftext|>; chat models end a turn with <|im_end|> (Granite: <|end_of_text|>).
+    for (const char* s : {"<|endoftext|>", "<|im_end|>", "<|end_of_text|>"}) {
         int id = tokenizer_.tokenId(s);
         if (id >= 0 && id < V) stopIds_.push_back(id);
     }
@@ -84,16 +84,23 @@ GenerateStats Engine::generate(const std::vector<int>& promptIn, int maxNew, con
     size_t common = 0;
     while (common < cached_.size() && common < prompt.size() && cached_[common] == prompt[common]) common++;
     if (common == prompt.size()) common--;
+    common = size_t(model_->resumeFrom(int(common)));  // recurrent models resume only at saved points
     setCached(common);
     st.reusedTokens = int(common);
 
+    // A batch ends one token before the end of the prompt so the model can save a restore point there: a redo
+    // re-runs only the last prompt token, an edit of the next message resumes from it.
+    const size_t restoreAt = prompt.size() - 1;
     double t0 = nowMs();
     for (size_t i = common; i < prompt.size();) {
-        int T = int(std::min<size_t>(Model::kMaxBatch, prompt.size() - i));
+        size_t end = std::min(prompt.size(), i + size_t(Model::kMaxBatch));
+        if (i < restoreAt && end > restoreAt) end = restoreAt;
+        int T = int(end - i);
         model_->forward(prompt.data() + i, T, int(cached_.size()), logits_.data());
-        cached_.insert(cached_.end(), prompt.begin() + long(i), prompt.begin() + long(i) + T);
+        cached_.insert(cached_.end(), prompt.begin() + long(i), prompt.begin() + long(end));
         cachedCount_.store(int(cached_.size()), std::memory_order_relaxed);
-        i += size_t(T);
+        i = end;
+        if (i == restoreAt) model_->saveRestorePoint(int(i));
         if (cancel_.load()) {
             st.stopReason = 2;
             st.prefillMs = nowMs() - t0;

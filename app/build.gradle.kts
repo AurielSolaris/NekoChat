@@ -20,8 +20,8 @@ android {
         applicationId = "app.auriel.realm.nekochat"
         minSdk = 21 // lowest level Jetpack Compose supports
         targetSdk = 36 // Android 16
-        versionCode = 3
-        versionName = "0.1.2"
+        versionCode = 4
+        versionName = "0.2.0"
         ndk { abiFilters += listOf("arm64-v8a") }
         externalNativeBuild {
             cmake {
@@ -32,10 +32,11 @@ android {
     }
 
     // Project layout: app/ui (Compose UI), app/architecture/shared (engine core + Kotlin bindings),
-    // app/architecture/gpt2 and app/architecture/qwen3 (per-architecture code).
+    // app/architecture/gpt2, qwen3 and granite (per-architecture code).
     sourceSets {
         getByName("main") {
-            java.srcDirs("ui", "architecture/shared/kotlin", "architecture/gpt2/kotlin", "architecture/qwen3/kotlin")
+            java.srcDirs("ui", "architecture/shared/kotlin", "architecture/gpt2/kotlin", "architecture/qwen3/kotlin",
+                "architecture/granite/kotlin")
         }
     }
 
@@ -83,6 +84,11 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
+    // Leave out the Google-signed dependency metadata block; F-Droid rejects it as an opaque blob.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
 }
 
 dependencies {

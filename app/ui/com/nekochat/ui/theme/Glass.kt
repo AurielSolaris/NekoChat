@@ -29,7 +29,10 @@ data class Palette(
     val backgroundDeep: Color,
     val surface: Color,
     val surfaceElevated: Color,
+    /** Decorative hairlines (glass edges); not relied on to find anything. */
     val border: Color,
+    /** Outlines and tracks of controls (sliders, progress, checkboxes, text fields): 3:1 where WCAG 1.4.11 holds. */
+    val control: Color,
     val accent: Color,
     val accentLight: Color,
     val accentSoft: Color,
@@ -56,6 +59,7 @@ enum class NekoTheme(val label: String, val description: String, val palette: Pa
             surface = Color(0xFF2C313C),
             surfaceElevated = Color(0xFF323842),
             border = Color(0xFF3A404C),
+            control = Color(0xFF3A404C),
             accent = Color(0xFFF4A7B9),
             accentLight = Color(0xFFF8C7D2),
             accentSoft = Color(0xFFEFA0B5),
@@ -85,6 +89,7 @@ enum class NekoTheme(val label: String, val description: String, val palette: Pa
             surface = Color(0xFF073642),
             surfaceElevated = Color(0xFF0C4250),
             border = Color(0xFF1B5361),
+            control = Color(0xFF1B5361),
             accent = Color(0xFF9CCBF0),
             accentLight = Color(0xFFC3E0F7),
             accentSoft = Color(0xFF7FB2E0),
@@ -98,6 +103,38 @@ enum class NekoTheme(val label: String, val description: String, val palette: Pa
             warning = Color(0xFFE8CB8A),
             error = Color(0xFFF0908F),
             info = Color(0xFF8FB8DE),
+        ),
+    ),
+
+    /**
+     * Near-black plum with soft pink, built to WCAG 2.2 AA on every surface it is drawn on (the background and both
+     * glass levels, including accent-tinted bubbles): body and secondary text >= 7.9:1, muted text >= 4.6:1 (lifted
+     * from the source #7C7289, which fell to 2.9:1 on raised glass), accent and status text >= 5.8:1, control
+     * outlines >= 3.1:1 and text on the accent 8.5:1.
+     */
+    GothicPink(
+        "Gothic Pink",
+        "Near-black plum with soft pink and pale cyan. High contrast throughout.",
+        Palette(
+            background = Color(0xFF110F14),
+            backgroundDeep = Color(0xFF09070A),
+            surface = Color(0xFF1B1622),
+            surfaceElevated = Color(0xFF261E30),
+            border = Color(0xFF3B2F4A),
+            control = Color(0xFF85779A),
+            accent = Color(0xFFF48FB1),
+            accentLight = Color(0xFFF8BBD0),
+            accentSoft = Color(0xFFF48FB1),
+            accentHighlight = Color(0xFFFF4081),
+            secondaryGlow = Color(0xFFB2EBF2),
+            gold = Color(0xFFFFE082),
+            text = Color(0xFFF5F4F6),
+            textSecondary = Color(0xFFD1C4E9),
+            textMuted = Color(0xFFA297B0),
+            success = Color(0xFFA5D6A7),
+            warning = Color(0xFFFFCC80),
+            error = Color(0xFFEF9A9A),
+            info = Color(0xFF9FA8DA),
         ),
     ),
 }
@@ -114,6 +151,7 @@ object Neko {
     val Surface get() = p.surface
     val SurfaceElevated get() = p.surfaceElevated
     val Border get() = p.border
+    val Control get() = p.control
 
     val Accent get() = p.accent
     val AccentLight get() = p.accentLight
@@ -156,9 +194,11 @@ fun NekoTheme(content: @Composable () -> Unit) {
             onSurface = Neko.Text,
             surfaceVariant = Neko.SurfaceElevated,
             onSurfaceVariant = Neko.TextSecondary,
-            outline = Neko.Border,
+            outline = Neko.Control,
+            outlineVariant = Neko.Border,
             error = Neko.Error,
         ),
+        typography = NekoTypography,
         content = content,
     )
 }

@@ -25,6 +25,31 @@ internal object NativeBridge {
 
     /** [weights, kvUsed, kvCapacity, kvResident, workspace] in bytes. Safe from any thread. */
     @JvmStatic external fun nativeMemory(handle: Long): LongArray
+
+    // Text-to-speech (Kokoro). Called from the speech thread owned by KokoroSpeech.
+    @JvmStatic external fun nativeTtsLoad(modelDir: String, lexiconDir: String, weights: Int, threads: Int): Long
+    @JvmStatic external fun nativeTtsRelease(handle: Long)
+    @JvmStatic external fun nativeTtsWeightBytes(handle: Long): Long
+
+    /** English text -> Kokoro phonemes (US or UK lexicon). */
+    @JvmStatic external fun nativeTtsPhonemize(handle: Long, utf8: ByteArray, british: Boolean): String
+
+    /** Phonemes (at most 510) -> 24 kHz mono samples in [-1, 1]. */
+    @JvmStatic external fun nativeTtsSynthesize(
+        handle: Long,
+        phonemes: ByteArray,
+        voicePath: String,
+        speed: Float,
+        seed: Long,
+    ): FloatArray
+    // Speech to text (Granite Speech). Called from the dictation thread owned by VoiceInput.
+    @JvmStatic external fun nativeAsrLoad(modelDir: String, weights: Int, threads: Int): Long
+    @JvmStatic external fun nativeAsrRelease(handle: Long)
+    @JvmStatic external fun nativeAsrWeightBytes(handle: Long): Long
+
+    /** 16 kHz mono samples in -1..1 -> UTF-8 text. */
+    @JvmStatic external fun nativeAsrTranscribe(handle: Long, pcm: FloatArray): ByteArray
+
     @JvmStatic external fun nativeContextLength(handle: Long): Int
     @JvmStatic external fun nativeTokenize(handle: Long, utf8: ByteArray): IntArray
     @JvmStatic external fun nativeCancel(handle: Long)

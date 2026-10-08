@@ -436,24 +436,15 @@ void TensorStore::loadTorchZip(std::shared_ptr<MappedFile> f) {
     for (auto& e : entries) byName[e.name] = &e;
 
     PRef root = runPickle(zipEntryData(*f, *pkl), size_t(pkl->size));
-    // Accept a raw state_dict or a training checkpoint wrapping one.
-    if (root->kind == PObj::Dict && !dictHasTensors(root)) {
-        for (auto& kv : root->dict) {
-            if (kv.second->kind == PObj::Dict && dictHasTensors(kv.second)) { root = kv.second; break; }
-        }
-    }
-    if (root->kind != PObj::Dict || !dictHasTensors(root)) fail("torch checkpoint does not contain a state_dict");
 
-    for (auto& kv : root->dict) {
-        const PRef& t = kv.second;
-        if (kv.first->kind != PObj::Str || t->kind != PObj::Tensor) continue;
+    auto add = [&](const std::string& name, const PRef& t) {
         auto it = byName.find(prefix + "data/" + t->storage->s);
-        if (it == byName.end()) fail("missing storage for " + kv.first->s);
+        if (it == byName.end()) fail("missing storage for " + name);
         const uint8_t* base = zipEntryData(*f, *it->second);
         // Only contiguous tensors are supported (what state_dict() produces for linear weights).
         int64_t expect = 1;
         for (size_t d = t->shape.size(); d-- > 0;) {
-            if (t->shape[d] != 1 && t->stride[d] != expect) fail("non-contiguous tensor " + kv.first->s);
+            if (t->shape[d] != 1 && t->stride[d] != expect) fail("non-contiguous tensor " + name);
             expect *= t->shape[d];
         }
         TensorView v;
@@ -461,8 +452,40 @@ void TensorStore::loadTorchZip(std::shared_ptr<MappedFile> f) {
         v.shape = t->shape;
         v.data = base + size_t(t->offset) * dtypeSize(t->dtype);
         if (v.data + size_t(v.numel()) * dtypeSize(v.dtype) > base + it->second->size)
-            fail("tensor out of storage range: " + kv.first->s);
-        tensors_[kv.first->s] = std::move(v);
+            fail("tensor out of storage range: " + name);
+        tensors_[name] = std::move(v);
+    };
+
+    // A bare tensor (e.g. a Kokoro voice pack) is stored under the name "tensor".
+    if (root->kind == PObj::Tensor) {
+        add("tensor", root);
+        return;
+    }
+    // Accept a raw state_dict, a training checkpoint wrapping one, or a dict of state_dicts (Kokoro: bert,
+    // predictor, decoder, ...), whose tensors are named "<outer key>.<inner key>".
+    if (root->kind != PObj::Dict) fail("torch checkpoint does not contain a state_dict");
+    if (dictHasTensors(root)) {
+        for (auto& kv : root->dict)
+            if (kv.first->kind == PObj::Str && kv.second->kind == PObj::Tensor) add(kv.first->s, kv.second);
+        return;
+    }
+    size_t nested = 0;
+    for (auto& kv : root->dict) {
+        if (kv.first->kind != PObj::Str || kv.second->kind != PObj::Dict || !dictHasTensors(kv.second)) continue;
+        nested++;
+        for (auto& inner : kv.second->dict)
+            if (inner.first->kind == PObj::Str && inner.second->kind == PObj::Tensor) add(kv.first->s + "." + inner.first->s, inner.second);
+    }
+    if (nested == 0) fail("torch checkpoint does not contain a state_dict");
+    // A training checkpoint ({"model": state_dict, "optimizer": ...}) keeps its model keys unprefixed.
+    if (nested == 1) {
+        for (auto& kv : root->dict) {
+            if (kv.first->kind != PObj::Str || kv.second->kind != PObj::Dict || !dictHasTensors(kv.second)) continue;
+            const std::string p = kv.first->s + ".";
+            std::unordered_map<std::string, TensorView> plain;
+            for (auto& t : tensors_) plain[starts_with(t.first, p) ? t.first.substr(p.size()) : t.first] = t.second;
+            tensors_ = std::move(plain);
+        }
     }
 }
 

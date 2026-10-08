@@ -65,15 +65,23 @@ fun ChatSettingsScreen(vm: ChatViewModel) {
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = s.persona,
-                    onValueChange = { v -> vm.updateSettings { it.copy(persona = v.take(200)) } },
-                    label = { Text("${Persona.NAME} is…") },
-                    minLines = 2,
-                    shape = RoundedCornerShape(NekoRadius.Large),
-                    colors = glassFieldColors(),
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                if (vm.usesPersona) {
+                    OutlinedTextField(
+                        value = s.persona,
+                        onValueChange = { v -> vm.updateSettings { it.copy(persona = v.take(200)) } },
+                        label = { Text("${Persona.NAME} is…") },
+                        minLines = 2,
+                        shape = RoundedCornerShape(NekoRadius.Large),
+                        colors = glassFieldColors(),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    Text(
+                        "This model replies the way it was trained to and has no persona to set.",
+                        color = Neko.TextMuted,
+                        fontSize = 12.sp,
+                    )
+                }
             }
 
             SettingsGroup("Sampling") {
@@ -119,7 +127,7 @@ fun ChatSettingsScreen(vm: ChatViewModel) {
             }
 
             Row(Modifier.fillMaxWidth().padding(bottom = 16.dp), horizontalArrangement = Arrangement.Center) {
-                Chip("Reset to defaults", selected = false) { vm.updateSettings { ChatSettings() } }
+                Chip("Reset to defaults", selected = false) { vm.resetSettings() }
             }
         }
     }
@@ -147,7 +155,7 @@ private fun NekoSlider(value: Float, range: ClosedFloatingPointRange<Float>, ste
         colors = SliderDefaults.colors(
             thumbColor = Neko.Accent,
             activeTrackColor = Neko.Accent,
-            inactiveTrackColor = Neko.Border,
+            inactiveTrackColor = Neko.Control,
             activeTickColor = Color.Transparent,
             inactiveTickColor = Color.Transparent,
         ),

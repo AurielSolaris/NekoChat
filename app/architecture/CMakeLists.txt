@@ -7,6 +7,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(SHARED_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shared/cpp)
 set(GPT2_DIR ${CMAKE_CURRENT_SOURCE_DIR}/gpt2/cpp)
 set(QWEN3_DIR ${CMAKE_CURRENT_SOURCE_DIR}/qwen3/cpp)
+set(GRANITE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/granite/cpp)
+set(GRANITE_SPEECH_DIR ${CMAKE_CURRENT_SOURCE_DIR}/granite_speech/cpp)
+set(KOKORO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/kokoro/cpp)
 set(GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
 
 # ---------------------------------------------------------------------------
@@ -83,8 +86,12 @@ add_library(neko_core STATIC
     ${SHARED_DIR}/gpu/gl_compute.cpp
     ${GPT2_DIR}/gpt2_model.cpp
     ${QWEN3_DIR}/qwen3_model.cpp
+    ${GRANITE_DIR}/granite_model.cpp
+    ${GRANITE_SPEECH_DIR}/granite_speech_model.cpp
+    ${KOKORO_DIR}/kokoro_model.cpp
+    ${KOKORO_DIR}/kokoro_g2p.cpp
 )
-target_include_directories(neko_core PUBLIC ${SHARED_DIR} ${GPT2_DIR} ${QWEN3_DIR} ${GEN_DIR})
+target_include_directories(neko_core PUBLIC ${SHARED_DIR} ${GPT2_DIR} ${QWEN3_DIR} ${GRANITE_DIR} ${GRANITE_SPEECH_DIR} ${KOKORO_DIR} ${GEN_DIR})
 # Inference must be optimised even in debug APKs.
 target_compile_options(neko_core PRIVATE -O3 -Wall -Wno-unused-function)
 target_link_libraries(neko_core PUBLIC log EGL GLESv3 dl)

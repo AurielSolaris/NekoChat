@@ -121,6 +121,25 @@ fun SetupScreen(vm: ChatViewModel) {
             }
         }
 
+        // Optional, and skippable: reading aloud is set up here or later in Settings → Accessibility.
+        Spacer(Modifier.height(12.dp))
+        Column(
+            Modifier
+                .widthIn(max = 520.dp)
+                .fillMaxWidth()
+                .glass()
+                .padding(18.dp),
+        ) {
+            SectionLabel("Hear Neko (optional)")
+            ToggleRow("Read replies aloud", "You can change this any time in Settings → Accessibility.",
+                vm.readReplies, vm::updateReadReplies)
+            if (!vm.kokoroInstalled) {
+                Spacer(Modifier.height(8.dp))
+                val download by vm.voiceDownload.collectAsState()
+                VoiceDownloadStatus(vm, download)
+            }
+        }
+
         Spacer(Modifier.height(20.dp))
         PrimaryButton("Start chatting", enabled = canStart, modifier = Modifier.widthIn(max = 520.dp).fillMaxWidth()) {
             selected?.let(vm::startChatting)

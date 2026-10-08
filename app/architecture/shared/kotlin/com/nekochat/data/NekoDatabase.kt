@@ -51,6 +51,14 @@ object PrefKeys {
     const val DOWNLOAD_ENGINE = "download_engine"
     const val WEIGHTS = "weights"
     const val THEME = "theme"
+    const val SPEECH_ENGINE = "speech_engine"
+    const val READ_REPLIES = "read_replies"
+    const val NARRATE = "narrate"
+    const val SPEECH_VOICE = "speech_voice"
+    const val SPEECH_SPEED = "speech_speed"
+    const val SPEECH_WEIGHTS = "speech_weights"
+    const val DICTATION_MODEL = "dictation_model"
+    const val DICTATION_WEIGHTS = "dictation_weights"
 }
 
 /** In-memory view of the preferences table; writes go to Room in order on [writes]. */
@@ -151,6 +159,8 @@ data class DownloadEntity(
     val createdAt: Long,
     /** DownloadEngine name; added in schema version 2. */
     @ColumnInfo(defaultValue = "Aria2Multi") val engine: String,
+    /** DownloadKind name (chat model or voice); added in schema version 3. */
+    @ColumnInfo(defaultValue = "Model") val kind: String = "Model",
 )
 
 @Dao
@@ -169,7 +179,7 @@ interface DownloadDao {
 
 @Database(
     entities = [PreferenceEntity::class, ChatEntity::class, MessageEntity::class, DownloadEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 abstract class NekoDatabase : RoomDatabase() {
@@ -187,9 +197,16 @@ abstract class NekoDatabase : RoomDatabase() {
             }
         }
 
+        /** v3: downloads say whether they are a chat model or a voice (Kokoro). */
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE downloads ADD COLUMN kind TEXT NOT NULL DEFAULT 'Model'")
+            }
+        }
+
         fun get(context: Context): NekoDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, NekoDatabase::class.java, "nekochat.db")
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build()
                 .also { instance = it }
         }

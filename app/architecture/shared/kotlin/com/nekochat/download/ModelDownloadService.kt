@@ -19,6 +19,7 @@ data class ModelDownload(
     val networkBlocked: Boolean = false,
     /** Engine moving the bytes; fixed for the life of a download. */
     val engine: DownloadEngine = DownloadEngine.Aria2Multi,
+    val kind: DownloadKind = DownloadKind.Model,
 ) {
     val progress: Float get() = if (bytesTotal > 0) (bytesDone.toFloat() / bytesTotal).coerceIn(0f, 1f) else 0f
     val active: Boolean get() = status == DownloadStatus.Preparing || status == DownloadStatus.Downloading
@@ -26,6 +27,12 @@ data class ModelDownload(
 }
 
 class DownloadException(message: String, val networkBlocked: Boolean = false) : Exception(message)
+
+/**
+ * What a download installs: a chat model (models folder), the Kokoro voice or a speech-to-text model for voice
+ * input (both in the speech folder).
+ */
+enum class DownloadKind { Model, Speech, Dictation }
 
 /** What moves the bytes. A download keeps the engine it was started with. */
 enum class DownloadEngine(val label: String, val detail: String, val connections: Int) {
@@ -52,7 +59,7 @@ enum class DnsMode(val label: String) {
 interface ModelDownloadService {
     val downloads: StateFlow<List<ModelDownload>>
 
-    fun start(repoId: String)
+    fun start(repoId: String, kind: DownloadKind = DownloadKind.Model)
     fun pause(repoId: String)
     fun resume(repoId: String)
 

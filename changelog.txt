@@ -1,6 +1,133 @@
 NekoChat changelog
 ==================
 
+0.2.0 (2026-10-08)
+------------------
+
+Granite 4.0-H
+- IBM Granite 4.0-H dense hybrids run on the CPU: granite-4.0-h-350m and granite-4.0-h-1b
+  (config model_type "granitemoehybrid" without experts). Mamba2 layers (in_proj, causal depthwise
+  conv + SiLU, selective scan with NEON, gated RMSNorm, out_proj) and grouped-query attention with
+  no positional encoding, SwiGLU MLP in every layer; muP multipliers (embedding, residual,
+  attention, logits) folded into the weights where possible. Weights FP16, FP8 or FP4.
+- Rewinding a recurrent state: the engine ends a prefill batch one token before the end of each
+  prompt and the model saves a restore point there (two kept, f32). Redo and editing the last
+  message resume from them; points after a rewind are dropped. Counted as chat memory.
+- New cl100k pre-tokenizer (digits grouped up to three); <|end_of_text|> ends a reply.
+- Granite chat format: Granite 4.0's role-tag template, Neko's persona as the system message.
+- Verified on a Galaxy M31 against transformers (fp32): identical tokenizer ids (vs tokenizer.json)
+  and identical greedy continuations, chat template included; redo reproduces them. 350M:
+  ~11 tok/s on 4x A73. FP8 346 MB, KL 0.024, top-1 89%; FP4 184 MB, KL 0.43, top-1 68%.
+- Add models suggests Granite 4.0-H 350M (690 MB) and 1B (2.9 GB). Granite MoE (4.0-H Tiny/Small)
+  and non-hybrid Granite are refused before downloading, with the reason.
+- nekochat_cli --ref also re-runs each prompt on the warm cache (redo) and compares.
+- 1B verified the same way: identical tokenizer ids and greedy continuations at FP16, redo
+  included; ~2.7 tok/s on 4x A73, 2.8 GB (FP16) or 1.5 GB (FP8) of weights.
+
+Voice input (Granite Speech 5.0 TurboCTC, on-device speech to text)
+- Mic button in the chat input bar: tap, talk, tap again; the words are added to the message.
+  Recording runs only while the button is on (RECORD_AUDIO, asked on first use) and the audio is
+  never stored or sent anywhere. The bar shows Listening / transcribing, errors in plain words.
+- Two models, same architecture: Granite Speech NC (ibm-granite/granite-speech-5.0-470m-turboctc-nc,
+  default, CC BY-NC-SA 4.0, personal and non-commercial use) and Granite Speech
+  (ibm-granite/granite-speech-5.0-470m-turboctc, Apache 2.0). Chosen and downloaded (950 MB) on the
+  Accessibility page or from a prompt on the first mic tap; the license is shown before downloading.
+  Own precision setting (FP8 default). New download kind "Dictation" (no Room schema change).
+- Loaded on the first tap (while you speak) and released two minutes after the last dictation;
+  shown in Settings' memory card while loaded.
+- New native engine: 16 kHz audio -> 80 HTK mel bins (512-point FFT, 400-sample Hann window, 10 ms
+  hop, centred) -> log10 floored 8 dB below the peak, deltas, frame pairs stacked -> 16 conformer
+  blocks (0.5 FF, block self-attention over 128 frames with Shaw relative positions, GLU + depthwise
+  conv with BatchNorm folded in, 0.5 FF, LayerNorm), blocks 0-1 halve the frame rate, CTC posteriors
+  fed back after block 8 -> greedy CTC. Ported from transformers' granite_speech5.
+- Tokenizers: SentencePiece pieces with byte fallback (-nc) and GPT-2 byte-level BPE (Apache); text
+  is always valid UTF-8 (invalid bytes -> U+FFFD as the tokenizers library does) and crosses JNI as
+  bytes. Placeholder tokens (<|tokN|>) are dropped.
+- Verified on a Galaxy M31 against transformers (fp32, LibriSpeech): features within 1.6e-5, hidden
+  states within 7e-5 of the reference's range, identical frame ids and transcripts at FP16 and FP8
+  (FP4: 99% of frames, same text). 0.7x real time on 4x A73 (12.5 s of speech in 8.7 s).
+- nekochat_cli: --asr (transcribe, compare features / hidden states / ids / text with a dump from
+  transformers, time each stage) and --asr-decode (tokenizer only).
+
+Faster prompts
+- New GEMM path for 16+ rows (prefill, speech frames), any weight format: 16-row weight panels are
+  dequantized to f32 once per call (NEON transposes), K is walked in 256-wide slices so weights and
+  activations stay in cache, 4 x 16 register tiles. 25-29 GFLOP/s on 4x A73 (was 8-24). Granite
+  350M's 36-token prompt: 2.19 s -> 1.46 s. GPT-2, Qwen3 and Granite still match their references.
+  nekochat_cli --bench reports GEMM throughput.
+
+Themes
+- New theme: NekoChat Gothic Pink (near-black plum, soft pink, pale cyan). Checked against WCAG 2.2
+  AA on the background and both glass levels: text >= 7.9:1, muted text 4.7:1 (lifted from #7C7289,
+  which measured 2.9:1 on raised glass), accent and status text >= 5.8:1, text on the accent 8.5:1.
+- New palette role "control" for slider/progress tracks, checkbox and text-field outlines
+  (Material outline); Gothic Pink's is #85779A (>= 3.1:1, WCAG 1.4.11). Rose and Ocean keep their
+  border colour there, so they look unchanged.
+
+ReALM
+- ReALM checkpoints are recognised by a realm.json marker next to a GPT-2 checkpoint, e.g.
+  {"family": "realm", "version": "0.1.0", "base_architecture": "gpt2", "chat_format": "realm-v1"}.
+  config.json keeps model_type "gpt2"; folders without the marker are plain GPT-2.
+- ReALM chat format (realm-v1): "\nuser: <message>\nassistant:" per turn, no preamble, replies
+  may span lines and stop at "\nuser:" or a blank line (end of conversation).
+- Prompts keep the newest 512 tokens (ReALM trained on 512-token windows), cut anywhere.
+- New ReALM chats start from ReALM's sampling: temperature 0.8, top-k 40, up to 256 tokens,
+  no top-p and no repetition penalty. The persona field is hidden (ReALM has none).
+- The model list shows "ReALM v0.1.0 · GPT-2"; an unknown chat_format or non-GPT-2 base is
+  reported instead of loaded.
+
+Read aloud (Kokoro-82M, on-device text-to-speech)
+- New Accessibility page (Settings -> Accessibility): read replies aloud, narrate actions (screens,
+  "Message sent", "Chat deleted", "Model ready", ...), voice engine, Kokoro voice, speed, precision
+  and a sample. Setup has an optional "Hear Neko" card; switching reading on without a voice pops
+  up an offer to download one. Replies have a read-aloud button.
+- Two engines: Kokoro on the phone's CPU (works on de-Googled phones) and the phone's own
+  text-to-speech. Auto uses Kokoro once it is downloaded.
+- Kokoro-82M (hexgrad, Apache-2.0) is downloaded on request (about 340 MB: weights + 28 English
+  voices, US and UK) into its own speech folder. Downloads gained a kind (chat model / voice);
+  Room schema v3.
+- New native engine: ALBERT, the duration/prosody predictor (BiLSTMs, AdaIN blocks), text encoder,
+  decoder and the iSTFTNet vocoder (harmonic source, STFT, transposed convs, snake resblocks,
+  inverse STFT), ported from the kokoro package. Weights FP16, FP8 (default) or FP4.
+- Verified against the PyTorch reference: identical durations, F0/N to 83-87 dB SNR, audio spectrum
+  within 1.2 dB (correlation 0.98). FP8 vs FP16: 0.5 dB / 0.996; FP4: 2.1 dB / 0.95.
+- Memory: 173 MB (FP16), 126 MB (FP8), 100 MB (FP4). Speed on a Galaxy M31 (4x A73):
+  about 0.4x real time, sentence by sentence while the previous one plays.
+- English G2P ported from misaki: gold/silver lexicons (bundled, Apache-2.0), -s/-ed/-ing
+  stemming, numbers, years, ordinals, times, currency, capitalisation stress, "the"/"to"/"a"
+  by context, compounds. Words outside the lexicons are spelled out (no espeak-ng yet).
+- Loader: nested .pth checkpoints (dict of state dicts) and bare tensors (voice packs).
+
+Chat
+- Redo: the last reply (or error) has a redo button that replaces it with a new reply.
+- Edit: your messages have an edit button. The text goes back into the input bar with an
+  "Editing" banner that says how many later messages will be replaced; Cancel (or Back) keeps
+  the chat. An edit never follows you into another chat.
+- Both reuse the KV cache: the engine keeps the longest token prefix shared with the new prompt,
+  so a redo recomputes only the reply and an edit recomputes from the first changed token.
+
+F-Droid
+- tools/build-aria2.sh rebuilds libaria2c.so from pinned, checksummed sources (aria2 1.37.0,
+  OpenSSL 3.5.4 LTS, zlib 1.3.1, expat 2.7.3, c-ares 1.34.5, libssh2 1.11.1) for API 21 with the
+  app's NDK (r28c), and copies each library's license into assets/licenses.
+- The licenses of zlib, expat, c-ares and libssh2 (all linked into aria2c) now ship with the app
+  and are listed on the About page.
+- Builds without libaria2c.so work: downloads use Fetch and Settings offers only Fetch.
+- No Google dependency-metadata block in the APK; fastlane store metadata (title, descriptions,
+  icon, screenshots, changelogs/4.txt).
+
+Font
+- Body and UI text are set in Open Sans; screen, dialog and card titles in Spectral. Both are
+  SIL OFL 1.1, bundled in res/font, with their licenses on the About page. Numeric/code labels
+  stay monospace.
+- The Chats screen greets you by time of day ("Good morning, <name>", afternoon from 12:00,
+  evening from 17:00, "Up late?" from 22:00 to 5:00) with a line from Neko; it turns over while
+  the screen is open.
+
+Internal
+- ChatFormat gains contextTokens (token-window trimming) and usesPersona.
+- Version 0.2.0 (versionCode 4).
+
 0.1.2 (2026-09-15)
 ------------------
 

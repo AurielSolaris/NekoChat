@@ -107,9 +107,9 @@ size_t matchGpt2(const std::vector<uint32_t>& c, size_t i) {
     return k;
 }
 
-// Qwen2/Qwen3:
-// (?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+
-size_t matchQwen2(const std::vector<uint32_t>& c, size_t i) {
+// Qwen2/Qwen3 (maxDigits 1), cl100k (maxDigits 3):
+// (?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,maxDigits}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+
+size_t matchQwen2(const std::vector<uint32_t>& c, size_t i, size_t maxDigits) {
     const size_t n = c.size();
     auto lower = [](uint32_t x) { return x >= 'A' && x <= 'Z' ? x + 32 : x; };
     if (c[i] == '\'' && i + 1 < n) {
@@ -124,7 +124,10 @@ size_t matchQwen2(const std::vector<uint32_t>& c, size_t i) {
         while (k < n && isLetter(c[k])) k++;
         return k;
     }
-    if (isNumber(c[i])) return i + 1;  // digits are split one by one
+    if (isNumber(c[i])) {
+        for (k = i + 1; k < n && k - i < maxDigits && isNumber(c[k]);) k++;
+        return k;
+    }
     k = i + (c[i] == ' ' && i + 1 < n && isOther(c[i + 1]) ? 1 : 0);
     if (isOther(c[k])) {
         while (k < n && isOther(c[k])) k++;
@@ -209,6 +212,7 @@ void BpeTokenizer::finalize() {
     }
     for (auto& s : special_) idToBytes_[size_t(s.second)] = s.first;
     eosId_ = tokenId("<|endoftext|>");  // GPT-2 keeps it in the vocabulary, Qwen as an added token
+    if (eosId_ < 0) eosId_ = tokenId("<|end_of_text|>");  // Granite
     if (std::none_of(special_.begin(), special_.end(), [](auto& s) { return s.first == "<|endoftext|>"; }) && eosId_ >= 0)
         special_.emplace_back("<|endoftext|>", eosId_);
     // Longest match first when splitting on added tokens.
@@ -263,7 +267,8 @@ void BpeTokenizer::encodeOrdinary(const std::string& text, std::vector<int>& out
     }
     offs.push_back(text.size());
     for (size_t i = 0; i < cps.size();) {
-        size_t j = style_ == PreTokenizer::Qwen2 ? matchQwen2(cps, i) : matchGpt2(cps, i);
+        size_t j = style_ == PreTokenizer::Gpt2 ? matchGpt2(cps, i)
+                   : matchQwen2(cps, i, style_ == PreTokenizer::Cl100k ? 3 : 1);
         encodeWord(text.substr(offs[i], offs[j] - offs[i]), out);
         i = j;
     }

@@ -51,6 +51,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.nekochat.download.DownloadKind
 import com.nekochat.download.DownloadStatus
 import com.nekochat.download.ModelDownload
 import com.nekochat.engine.formatBytes
@@ -59,13 +60,15 @@ import com.nekochat.ui.theme.NekoRadius
 
 private data class Suggestion(val title: String, val repoId: String, val detail: String)
 
-// A recommended default for each supported architecture keeps the choice small (Hick's law).
+// One or two recommendations per supported architecture keep the choice small (Hick's law).
 private val SUGGESTIONS = listOf(
     Suggestion("Qwen3 0.6B", "Qwen/Qwen3-0.6B", "Chat model · follows instructions · 1.4 GB"),
+    Suggestion("Granite 4.0-H 350M", "ibm-granite/granite-4.0-h-350m", "IBM chat model · small and quick · 690 MB"),
+    Suggestion("Granite 4.0-H 1B", "ibm-granite/granite-4.0-h-1b", "IBM chat model · smarter, slower · 2.9 GB"),
     Suggestion("GPT-2", "openai-community/gpt2", "Classic text model · fastest · 548 MB"),
 )
 
-/** Downloads GPT-2 / Qwen3 models from Hugging Face through [com.nekochat.download.ModelDownloadService]. */
+/** Downloads GPT-2 / Qwen3 / Granite 4.0-H models from Hugging Face through [com.nekochat.download.ModelDownloadService]. */
 @Composable
 fun AddModelsScreen(vm: ChatViewModel) {
     val context = LocalContext.current
@@ -146,7 +149,7 @@ fun AddModelsScreen(vm: ChatViewModel) {
                 }
             }
 
-            SettingsGroup("Any GPT-2 or Qwen3 model") {
+            SettingsGroup("Any GPT-2, Qwen3 or Granite 4.0-H model") {
                 OutlinedTextField(
                     value = repo,
                     onValueChange = { repo = it.trim().take(120) },
@@ -170,7 +173,7 @@ fun AddModelsScreen(vm: ChatViewModel) {
                     repo = ""
                 }
                 Text(
-                    "NekoChat checks the model type first and only downloads GPT-2 and Qwen3 models " +
+                    "NekoChat checks the model type first and only downloads GPT-2, Qwen3 and Granite 4.0-H models " +
                         "(SafeTensors or PyTorch). Downloads use several connections and resume where they stopped.",
                     color = Neko.TextMuted,
                     fontSize = 12.sp,
@@ -225,7 +228,7 @@ private fun DownloadRow(
                     progress = { d.progress },
                     modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
                     color = if (d.status == DownloadStatus.Paused) Neko.TextMuted else Neko.Accent,
-                    trackColor = Neko.Border,
+                    trackColor = Neko.Control,
                     drawStopIndicator = {},
                 )
                 StatusText(
@@ -233,7 +236,14 @@ private fun DownloadRow(
                         if (d.status == DownloadStatus.Paused) "Paused" else "${formatBytes(d.bytesPerSecond)}/s",
                 )
             }
-            DownloadStatus.Completed -> StatusText("Installed · ${formatBytes(d.bytesTotal)}", color = Neko.Success)
+            DownloadStatus.Completed -> StatusText(
+                when (d.kind) {
+                    DownloadKind.Speech -> "Voice installed · "
+                    DownloadKind.Dictation -> "Voice input installed · "
+                    DownloadKind.Model -> "Installed · "
+                } + formatBytes(d.bytesTotal),
+                color = Neko.Success,
+            )
             DownloadStatus.Failed -> Row(verticalAlignment = Alignment.Top, modifier = Modifier.padding(top = 6.dp)) {
                 Icon(Icons.Rounded.Warning, contentDescription = "Error", tint = Neko.Error, modifier = Modifier.size(16.dp))
                 Text(d.error ?: "Download failed.", color = Neko.Error, fontSize = 13.sp, maxLines = 3,
@@ -251,7 +261,10 @@ private fun DownloadRow(
                 { Chip("Retry", selected = false, onClick = onResume) },
                 { Chip("Remove", selected = false, destructive = true, onClick = onCancel) },
             )
-            DownloadStatus.Completed -> listOf({ Chip("Use this model", selected = true, onClick = onUse) })
+            DownloadStatus.Completed ->
+                // Voices and speech models are chosen in Accessibility settings.
+                if (d.kind != DownloadKind.Model) emptyList()
+                else listOf({ Chip("Use this model", selected = true, onClick = onUse) })
         }
         if (actions.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
