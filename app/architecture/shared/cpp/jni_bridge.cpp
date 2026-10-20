@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // JNI surface for com.nekochat.engine.NativeBridge. Every call except nativeCancel must come from
 // the Kotlin inference thread (GPU contexts are bound to it).
 #include <jni.h>

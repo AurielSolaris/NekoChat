@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Writes the keys and values of token t < T into the f16 caches at position pos0 + t.
 // PA = (T, width, pos0, -), PB = (rowStride, kOffset, vOffset, -): K = qkv[t * rowStride + kOffset ..], V likewise.
 // Caches are [ctx][width] f16, two halves per uint (width even). Dispatch (ceil(width / 128), T).

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // NekoChat shared native core: logging, fp16 helpers, small utilities.
 #pragma once
 

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // GPU compute abstraction implemented by the Vulkan and OpenGL ES 3.1 backends.
 // Both run the same GLSL kernels (shaders/*.comp); Vulkan gets SPIR-V compiled at build time,
 // GLES compiles the embedded source at runtime.

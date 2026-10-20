@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Generation loop: tokenizer + model + sampler, with KV-cache prefix reuse across chat turns.
 // Not thread safe: use from the single inference thread (cancel() may be called from any thread).
 #pragma once

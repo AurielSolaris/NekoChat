@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Causal grouped-query attention, one (head, token) per workgroup, over f16 KV caches ([ctx][kvWidth], two halves
 // per uint). Keys are visited in tiles of 1024 with an online softmax, so shared memory does not limit the context.
 // PA = (T, qStride, nHead, pos0), PB = (headDim, scale bits, kvWidth, -).

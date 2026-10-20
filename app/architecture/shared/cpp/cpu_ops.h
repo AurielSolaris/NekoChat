@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // CPU (NEON) transformer kernels. Weights are [N][K] (f16 or FP8/FP4 blocks, see quant.h), activations f32,
 // KV caches f16.
 #pragma once

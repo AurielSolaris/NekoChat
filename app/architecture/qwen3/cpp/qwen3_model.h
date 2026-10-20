@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Qwen3 dense models (HF "qwen3": Qwen3-0.6B and up) on CPU, Vulkan or OpenGL ES.
 // Pre-norm decoder: RMSNorm, grouped-query attention with per-head q/k RMSNorm and NeoX RoPE, SwiGLU MLP.
 #pragma once

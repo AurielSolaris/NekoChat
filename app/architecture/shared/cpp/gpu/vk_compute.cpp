@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Vulkan compute backend. libvulkan is loaded at runtime so devices without a driver still start.
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>

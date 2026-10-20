@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 package com.nekochat.qwen3
 
 import com.nekochat.engine.ChatFormat

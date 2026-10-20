@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Byte-level BPE tokenizer (vocab.json + merges.txt, or HF tokenizer.json) for GPT-2, Qwen2/Qwen3 and cl100k-style
 // (Granite 4) vocabularies.
 #pragma once

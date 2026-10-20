@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Architecture-independent model interface. Each architecture (gpt2/, qwen3/) implements Model
 // for CPU and GPU; the engine only sees this interface.
 #pragma once

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Kokoro-82M (hexgrad/Kokoro-82M): StyleTTS 2 with an iSTFTNet vocoder, 24 kHz mono, CPU only.
 //
 // phoneme ids -> ALBERT (12 passes of one shared layer) -> duration/prosody predictor (BiLSTMs, AdaIN

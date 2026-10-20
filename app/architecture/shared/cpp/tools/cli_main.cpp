@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // On-device validation / benchmark tool (not shipped in the APK).
 //   nekochat_cli <modelDir> [--backend auto|vulkan|gl|cpu] [--weights fp16|fp8|fp4] [--threads N] [--prompt TEXT]
 //                [-n N] [--temp T] [--ref reference.json]

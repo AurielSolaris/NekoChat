@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Minimal JSON reader for config.json, safetensors headers and tokenizer files.
 #pragma once
 

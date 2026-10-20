@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 package com.nekochat.engine
 
 /** The assistant's identity, shared by every architecture's prompt format. */

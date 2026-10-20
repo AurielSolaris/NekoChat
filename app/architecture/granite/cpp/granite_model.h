@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // IBM Granite 4.0-H dense hybrids (HF "granitemoehybrid" without experts: granite-4.0-h-350m, -h-1b) on CPU.
 // Pre-norm decoder whose mixer is Mamba2 in most layers and grouped-query attention without positional encoding
 // (NoPE) in a few; every layer ends in a SwiGLU MLP. muP multipliers: embeddings * embedding_multiplier, each

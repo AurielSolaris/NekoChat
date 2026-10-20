@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // matmul.comp for FP8 (E4M3) weights. Row layout (quant.h): K/16 uvec4 of codes (16 weights each), then the
 // K/32 f16 block scales, 8 per uvec4. Same parameters and dispatch as matmul.comp; K % 32 == 0.
 layout(local_size_x = 64) in;

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // y[t][nOffset + n] (+)= act(x[xRow0 + t] . W[n] + bias[n]); W is f16 packed as uvec4 (8 halves). K % 8 == 0.
 // PA = (K, N, T, flags) flags: 1 = gelu, 2 = accumulate into y, 4 = add bias. N is the row stride of y.
 // PB = (xRow0, nOffset, -, -): nOffset lets a weight matrix split across buffers write its slice of y.

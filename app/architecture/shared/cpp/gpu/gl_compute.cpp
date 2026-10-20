@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // OpenGL ES 3.1 compute backend with a headless EGL context.
 // The context is current on the creating thread: all calls must come from the inference thread.
 #include <EGL/egl.h>

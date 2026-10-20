@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Read-only view of checkpoint tensors from .safetensors or PyTorch (.pt/.pth/.bin) files.
 // Files are mmapped; tensors are exposed as pointers into the mapping (zero copy).
 #pragma once

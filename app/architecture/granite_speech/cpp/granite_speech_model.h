@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // IBM Granite Speech 5.0 TurboCTC (HF "granite_speech5_ctc": granite-speech-5.0-470m-turboctc and its -nc
 // sibling): English speech to text on the CPU.
 //

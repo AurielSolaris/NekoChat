@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 package com.nekochat.ui
 
 import androidx.compose.foundation.layout.Arrangement
@@ -86,7 +89,7 @@ fun AboutScreen(vm: ChatViewModel) {
             SettingsGroup("License") {
                 Text(
                     "NekoChat is free software: you can redistribute it and/or modify it under the terms of the " +
-                        "GNU General Public License, version 3.",
+                        "GNU General Public License, version 3 or (at your option) any later version.",
                     color = Neko.TextSecondary, fontSize = 13.sp, lineHeight = 19.sp,
                 )
                 NavRow(licenses[0].title, "Read the full license") { shown = licenses[0].asset }

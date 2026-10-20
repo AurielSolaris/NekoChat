@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Weight storage formats shared by the CPU and GPU paths.
 //
 // F16 keeps IEEE halves. FP8 (OCP E4M3) and FP4 (OCP E2M1) group each row into blocks of 32 weights that share

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // GPT-2 (HF "gpt2" family: small/medium/large/xl and fine-tunes) on CPU, Vulkan or OpenGL ES.
 #pragma once
 

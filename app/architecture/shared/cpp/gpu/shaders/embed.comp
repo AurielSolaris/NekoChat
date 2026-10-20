@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // x[t][c] = table[token[t] - rowBase][c] (+ wpe[pos0 + t][c]). Tokens outside [rowBase, rowBase + rows) are skipped,
 // so a table split across several buffers is gathered with one dispatch per chunk.
 // PA = (T, C, pos0, flags) flags: 1 = add the f16 position table, 2 = FP8 table, 4 = FP4 table (quant.h layout).

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // matmul.comp for FP4 (E2M1) weights. Row layout (quant.h), in uvec2 units: K/16 uvec2 of codes (a 32-weight
 // block is 2 uvec2; weight j sits in the low nibble of byte j, weight 16 + j in its high nibble), then the K/32
 // f16 block scales, zero-padded to 16 bytes. Same parameters and dispatch as matmul.comp; K % 32 == 0.

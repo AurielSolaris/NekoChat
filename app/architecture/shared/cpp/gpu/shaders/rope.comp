@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Qwen3 attention prologue, in place on qkv: per-head RMSNorm (q_norm / k_norm), then NeoX rotary embedding.
 // Heads [0, nHead) are queries and [nHead, nHead + nKv) keys (keys follow the queries in each row).
 // PA = (qkvStride, nHead, headDim, pos0), PB = (eps bits, flags, -, -) flags: 1 = apply the norm.

@@ -64,7 +64,7 @@ framework dependencies. It uses Vulkan, OpenGL ES or the CPU, whichever the devi
 - **Supported architectures:** GPT-2 (`model_type: gpt2`, all sizes and fine-tunes) and Qwen3 dense
   models (`model_type: qwen3`, e.g. Qwen3-0.6B / 1.7B / 4B) and IBM Granite 4.0-H dense hybrids
   (`model_type: granitemoehybrid` without experts: granite-4.0-h-350m, granite-4.0-h-1b; CPU only)
-- **License:** [GPL-3.0](LICENSE)
+- **License:** [GPL-3.0-or-later](LICENSE)
 - **Branding & UI rules:** [`app/branding/BRANDING+UI.md`](app/branding/BRANDING+UI.md)
 
 ## Features
@@ -466,7 +466,20 @@ the quantized GPU kernels are ALU-bound too (Vulkan/GL 4.0–4.8 tok/s for every
 
 ## License
 
-NekoChat is free software under the [GNU General Public License v3](LICENSE).
+Copyright (C) 2026 AurielSolaris
+
+This program is free software: you can redistribute it and/or modify it under the terms of the
+GNU General Public License as published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
+even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with this program. If
+not, see <https://www.gnu.org/licenses/>. The full text is in [LICENSE](LICENSE).
+
+Every source file carries `SPDX-License-Identifier: GPL-3.0-or-later`.
 
 Voice input uses IBM's [Granite Speech 5.0 TurboCTC](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc)
 (Apache-2.0) or its [non-commercial sibling](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc-nc)

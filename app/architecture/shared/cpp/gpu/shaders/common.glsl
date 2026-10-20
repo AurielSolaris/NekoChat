@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Shared preamble. The build prepends "#version 450 + NEKO_VULKAN" for SPIR-V, GLES prepends "#version 310 es".
 // Every kernel takes two ivec4 parameter blocks (floats are passed as raw bits) and up to 4 SSBOs.
 #ifdef NEKO_VULKAN

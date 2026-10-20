@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // English text -> Kokoro phonemes. A port of misaki's English G2P (hexgrad/misaki, en.py) for the parts that
 // don't need its spaCy tagger or espeak-ng fallback: gold then silver lexicon lookup, -s / -ed / -ing
 // stemming, numbers read out, capitalisation stress, and the next word deciding "the" / "to" / "a". Words the

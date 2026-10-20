@@ -1,6 +1,12 @@
 NekoChat changelog
 ==================
 
+Unreleased
+----------
+
+- License stated as GPL-3.0-or-later: SPDX headers in every source file, the GPL notice in the
+  README, and the About page says "version 3 or (at your option) any later version".
+
 0.2.0 (2026-10-08)
 ------------------
 

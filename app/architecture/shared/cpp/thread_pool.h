@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Persistent worker pool for CPU kernels. Workers are pinned to the big cores and spin
 // briefly between kernels (decode issues ~50 small kernels per token).
 #pragma once

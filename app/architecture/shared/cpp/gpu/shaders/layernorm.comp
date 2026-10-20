@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 AurielSolaris
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // One workgroup per row: row r normalises x row (r + rowOffset) into y row r.
 // LayerNorm (GPT-2): y = (x - mean) / sqrt(var + eps) * gamma + beta.
 // RMSNorm (Qwen3):   y = x / sqrt(mean(x^2) + eps) * gamma.
