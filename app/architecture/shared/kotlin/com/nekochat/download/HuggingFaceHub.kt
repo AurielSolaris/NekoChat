@@ -9,7 +9,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
-import java.net.URL
 import java.net.UnknownHostException
 
 /** Resolves which files of a Hugging Face model repository NekoChat needs. Blocking; call off the main thread. */
@@ -75,19 +74,15 @@ object HuggingFaceHub {
             .getOrElse { if (it is DownloadException) throw it else JSONObject() }
 
     private fun get(url: String): String {
-        val c = try {
-            (URL(url).openConnection() as HttpURLConnection).apply {
+        var c: HttpURLConnection? = null
+        try {
+            c = HubHttp.open(url) {
                 connectTimeout = 15_000
                 readTimeout = 30_000
-                setRequestProperty("User-Agent", "NekoChat")
             }
-        } catch (e: IOException) {
-            throw DownloadException("Couldn't reach Hugging Face. Check your internet connection.")
-        }
-        try {
             when (val code = c.responseCode) {
                 200 -> return c.inputStream.bufferedReader().use { it.readText() }
-                401, 403 -> throw DownloadException("This model is gated or private. NekoChat can only download public models.")
+                401, 403 -> throw DownloadException(HubHttp.denied())
                 404 -> throw DownloadException("Model not found on Hugging Face. Check the name, e.g. Qwen/Qwen3-0.6B.")
                 else -> throw DownloadException("Hugging Face returned HTTP $code. Try again later.")
             }
@@ -102,7 +97,7 @@ object HuggingFaceHub {
             Log.w("NekoChat", "Hugging Face request failed: $url ($e)", e)
             throw DownloadException("Couldn't reach Hugging Face. Check your internet connection.")
         } finally {
-            c.disconnect()
+            c?.disconnect()
         }
     }
 }

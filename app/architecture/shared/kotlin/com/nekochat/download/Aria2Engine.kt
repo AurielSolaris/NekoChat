@@ -36,18 +36,29 @@ internal class Aria2Engine(private val context: Context, private val defaultDir:
     private var generation = 0  // handles are "generation:gid"; a new process invalidates old gids
     private val lastDone = HashMap<String, Long>()
 
+    /**
+     * Files only huggingface.co itself can serve to the signed-in user (small config files) are
+     * fetched in-process: aria2 is never given the user's token, so it can't forward it anywhere.
+     */
+    private val local = FetchEngine()
+
+    private fun isLocal(handle: String) = handle.startsWith("fetch:")
+
     override fun add(url: String, dir: File, name: String, size: Long, connections: Int): String {
+        // With a Hugging Face token, aria2 gets the CDN's signed URL instead of the hub URL.
+        val source = HubHttp.anonymousUrl(url) ?: return local.add(url, dir, name, size, connections)
         val d = daemon()
         val options = JSONObject()
             .put("dir", dir.path)
             .put("out", name)
             .put("split", connections.toString())
             .put("max-connection-per-server", connections.toString())
-        val gid = d.rpc.call("aria2.addUri", JSONArray().put(url), options) as String
+        val gid = d.rpc.call("aria2.addUri", JSONArray().put(source), options) as String
         return "$generation:$gid"
     }
 
     override fun status(handle: String): FileStatus? {
+        if (isLocal(handle)) return local.status(handle)
         val d = daemon ?: return null
         val gid = gidOf(handle) ?: return null
         if (!d.alive) {
@@ -70,16 +81,19 @@ internal class Aria2Engine(private val context: Context, private val defaultDir:
     }
 
     override fun pause(handle: String) {
+        if (isLocal(handle)) return local.pause(handle)
         gidOf(handle)?.let { gid -> runCatching { daemon?.rpc?.call("aria2.forcePause", gid) } }
     }
 
     override fun resume(handle: String): Boolean {
+        if (isLocal(handle)) return local.resume(handle)
         val gid = gidOf(handle) ?: return false
         if (daemon?.alive != true) return false
         return runCatching { daemon?.rpc?.call("aria2.unpause", gid) }.isSuccess
     }
 
     override fun remove(handle: String) {
+        if (isLocal(handle)) return local.remove(handle)
         lastDone.remove(handle)
         val gid = gidOf(handle) ?: return
         runCatching { daemon?.rpc?.call("aria2.forceRemove", gid) }
@@ -92,7 +106,10 @@ internal class Aria2Engine(private val context: Context, private val defaultDir:
         daemon = null
     }
 
-    override fun close() = restart()
+    override fun close() {
+        local.close()
+        restart()
+    }
 
     private fun gidOf(handle: String): String? {
         val parts = handle.split(':', limit = 2)

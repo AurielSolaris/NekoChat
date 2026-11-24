@@ -161,6 +161,10 @@ fun SettingsScreen(vm: ChatViewModel) {
                 }
             }
 
+            SettingsGroup("Hugging Face") {
+                HfTokenSection(vm)
+            }
+
             SettingsGroup("About") {
                 NavRow("About NekoChat", "Version, license and open-source components", onClick = vm::openAbout)
             }

@@ -20,6 +20,8 @@ import com.nekochat.data.PrefKeys
 import com.nekochat.data.PreferenceStore
 import com.nekochat.data.Role
 import com.nekochat.download.DnsMode
+import com.nekochat.download.DownloadException
+import com.nekochat.download.HubToken
 import com.nekochat.download.DownloadEngine
 import com.nekochat.download.aria2Available
 import com.nekochat.speech.DictationFiles
@@ -121,6 +123,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         private set
     /** False in builds without the aria2 binary; only Fetch is offered then. */
     val hasAria2 = aria2Available(app)
+    /** Hugging Face token: the UI only ever holds its masked form (hf_••••1234), never the token. */
+    val hfTokenSupported = HubToken.supported
+    var hfTokenMasked by mutableStateOf<String?>(null)
+        private set
+    var hfTokenBusy by mutableStateOf(false)
+        private set
+    var hfTokenMessage by mutableStateOf<String?>(null)
+        private set
+    var hfTokenFailed by mutableStateOf(false)
+        private set
+
+    init {
+        HubToken.init(app)
+        viewModelScope.launch(Dispatchers.IO) { hfTokenMasked = HubToken.masked() }
+    }
+
     var downloadEngine by mutableStateOf(if (hasAria2) DownloadEngine.Aria2Multi else DownloadEngine.Fetch)
         private set
     var precision by mutableStateOf(WeightPrecision.FP16)
@@ -546,6 +564,44 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         dnsMode = mode
         prefs[PrefKeys.DOWNLOAD_DNS] = mode.name
         downloads.setDnsMode(mode)
+    }
+
+    /** Verifies [raw] with Hugging Face, then saves it (replacing any saved token). [onSaved] runs on success. */
+    fun saveHfToken(raw: String, onSaved: () -> Unit) {
+        if (hfTokenBusy) return
+        hfTokenBusy = true
+        hfTokenMessage = null
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val name = HubToken.verify(raw)
+                    HubToken.save(raw)
+                    name to HubToken.masked()
+                }
+            }
+            result.onSuccess { (name, masked) ->
+                hfTokenMasked = masked
+                hfTokenFailed = false
+                hfTokenMessage = "Token saved. Signed in as $name."
+                onSaved()
+            }.onFailure {
+                hfTokenFailed = true
+                // Fixed text for anything unexpected: never echo exception text that could carry the token.
+                hfTokenMessage = (it as? DownloadException)?.message ?: "Couldn't save the token on this device."
+            }
+            hfTokenBusy = false
+        }
+    }
+
+    fun removeHfToken() {
+        hfTokenMasked = null
+        hfTokenFailed = false
+        hfTokenMessage = "Token removed."
+        viewModelScope.launch(Dispatchers.IO) { HubToken.clear() }
+    }
+
+    fun clearHfTokenMessage() {
+        hfTokenMessage = null
     }
 
     fun selectDownloadEngine(engine: DownloadEngine) {
