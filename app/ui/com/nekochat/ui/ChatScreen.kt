@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -76,6 +77,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.Role as SemanticsRole
@@ -154,6 +157,7 @@ private fun MessageList(vm: ChatViewModel, chat: Conversation) {
     val listState = rememberLazyListState()
     val messages = chat.messages
     val streaming = vm.generatingChatId == chat.id
+    val clipboard = LocalClipboardManager.current
     var streamText by remember { mutableStateOf("") }
 
     // Render/inference decoupling: tokens land in a StreamBuffer on the inference thread; the UI
@@ -203,10 +207,12 @@ private fun MessageList(vm: ChatViewModel, chat: Conversation) {
         }
         val lastId = messages.lastOrNull()?.id
         val idle = !vm.generating
+        // Android 13+ shows its own "copied" confirmation for clipboard writes; no toast needed.
         items(messages.asReversed(), key = { it.id }) { m ->
             // Edit on the user's messages; read aloud on replies; redo on the last reply (or error).
             // Edit and redo are hidden while generating.
             val actions = buildList {
+                add(MessageAction(CopyIcon, "Copy message") { clipboard.setText(AnnotatedString(m.text)) })
                 if (m.role == Role.User && idle) add(MessageAction(Icons.Rounded.Edit, "Edit message") { vm.startEditing(m) })
                 if (m.role == Role.Assistant) add(MessageAction(Icons.Rounded.PlayArrow, "Read aloud") { vm.speakMessage(m.text) })
                 if (m.role != Role.User && m.id == lastId && idle) add(MessageAction(Icons.Rounded.Refresh, "Redo reply") { vm.regenerate() })
@@ -261,7 +267,9 @@ private fun Message(
                 Icon(Icons.Rounded.Warning, contentDescription = "Error", tint = Neko.Error,
                     modifier = Modifier.padding(end = 8.dp).size(18.dp))
             }
-            if (typing) TypingDots() else Text(text, color = Neko.Text, fontSize = 15.sp, lineHeight = 22.sp)
+            if (typing) TypingDots() else SelectionContainer {
+                Text(text, color = Neko.Text, fontSize = 15.sp, lineHeight = 22.sp)
+            }
         }
         if (actions.isNotEmpty()) {
             // Quiet 40 dp icons under the bubble: findable, but no competition with the conversation.
@@ -523,6 +531,19 @@ private val MicIcon: ImageVector by lazy {
                 "M12,14c1.66,0 2.99,-1.34 2.99,-3L15,5c0,-1.66 -1.34,-3 -3,-3S9,3.34 9,5v6c0,1.66 1.34,3 3,3z" +
                     "M17.3,11c0,3 -2.54,5.1 -5.3,5.1S6.7,14 6.7,11L5,11c0,3.41 2.72,6.23 6,6.72L11,21h2v-3.28" +
                     "c3.28,-0.48 6,-3.3 6,-6.72h-1.7z",
+            ),
+            fill = SolidColor(Color.Black),
+        )
+    }.build()
+}
+
+/** Material "content_copy" (filled), drawn here because the app ships only the core icon set. */
+private val CopyIcon: ImageVector by lazy {
+    ImageVector.Builder("ContentCopy", 24.dp, 24.dp, 24f, 24f).apply {
+        addPath(
+            addPathNodes(
+                "M16,1L4,1c-1.1,0 -2,0.9 -2,2v14h2L4,3h12L16,1zM19,5L8,5c-1.1,0 -2,0.9 -2,2v14c0,1.1 0.9,2 2,2h11" +
+                    "c1.1,0 2,-0.9 2,-2L21,7c0,-1.1 -0.9,-2 -2,-2zM19,21L8,21L8,7h11v14z",
             ),
             fill = SolidColor(Color.Black),
         )
