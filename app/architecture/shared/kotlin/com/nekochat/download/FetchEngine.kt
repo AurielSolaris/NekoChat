@@ -7,8 +7,6 @@ import android.os.SystemClock
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
@@ -116,10 +114,9 @@ internal class FetchEngine : TransferEngine {
             job.done = have
             return true
         }
-        val c = (URL(job.url).openConnection() as HttpURLConnection).apply {
+        val c = HubHttp.open(job.url) {
             connectTimeout = 20_000
             readTimeout = 30_000
-            setRequestProperty("User-Agent", USER_AGENT)
             if (have > 0) setRequestProperty("Range", "bytes=$have-")
         }
         try {
@@ -130,7 +127,7 @@ internal class FetchEngine : TransferEngine {
                     job.file.delete()
                     throw IOException("range not satisfiable, restarting")
                 }
-                401, 403 -> throw DownloadException("Access denied (HTTP $code).")
+                401, 403 -> throw DownloadException(HubHttp.denied())
                 404 -> throw DownloadException("File not found on the server (HTTP 404).")
                 else -> throw IOException("HTTP $code")
             }

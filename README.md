@@ -80,6 +80,9 @@ framework dependencies. It uses Vulkan, OpenGL ES or the CPU, whichever the devi
   `config.json` is checked before anything is downloaded. Choose the downloader in Settings:
   **aria2 (multi-thread)**, **aria2 (single-thread)** or **Fetch (single-thread)**. All of them
   resume where they stopped and show a progress notification.
+- **Hugging Face access token** (*Settings → Hugging Face*) for gated and private models. It is checked
+  with Hugging Face, kept encrypted with the Android Keystore (Android 6+), sent to huggingface.co only
+  and never to the download CDN or to aria2, and can be replaced or removed at any time.
 - **Multiple chats**, stored in a Room database together with every preference.
 - **Per-chat settings page:** temperature, top-k, top-p, repetition penalty and window, max reply
   length (up to 4096 tokens), seed, persona, chat name.

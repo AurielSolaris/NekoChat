@@ -47,6 +47,10 @@ class HubDownloadService(private val context: Context) : ModelDownloadService {
     private val stagingDir = File(modelsDir, ".downloads")
     private val dao: DownloadDao = NekoDatabase.get(context).downloads()
 
+    init {
+        HubToken.init(context)
+    }
+
     // Every state change runs on one thread, so tasks and engines need no locking.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
     private val state = MutableStateFlow<List<ModelDownload>>(emptyList())
